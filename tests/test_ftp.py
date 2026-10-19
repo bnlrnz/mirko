@@ -223,3 +223,66 @@ def test_lftp_rejects_unsafe_path_before_running() -> None:
         client.list("../etc")
     with pytest.raises(FtpError):
         client.fetch("", Path("/tmp/x"))
+
+
+GERMAN_LISTING = """\
+  32016 Okt 12 09:19 Inbox/Drafts/Draft LS reply on resolving ENs.docx
+  423820 Okt 14 10:03 Inbox/Drafts/Draft_MeetingReport-day1.rtf
+        Okt 16 02:32 Inbox/Drafts/
+"""
+
+
+def test_parse_localized_listing_without_permissions() -> None:
+    entries, unparsed = parse_ls_listing(
+        GERMAN_LISTING, now=datetime(2026, 10, 19, tzinfo=timezone.utc)
+    )
+
+    assert unparsed == []
+    by_name = {entry.name: entry for entry in entries}
+    assert by_name["Inbox/Drafts/Draft LS reply on resolving ENs.docx"].size == 32016
+    assert (
+        by_name["Inbox/Drafts/Draft LS reply on resolving ENs.docx"].mtime
+        == "2026-10-12T09:19:00"
+    )
+    assert by_name["Inbox/Drafts"].is_dir is True
+    assert by_name["Inbox/Drafts"].size is None
+
+
+def test_client_strips_listing_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = LftpFtpClient(source())
+    monkeypatch.setattr(
+        client,
+        "_run",
+        lambda script: (
+            "  32016 Okt 12 09:19 Inbox/Drafts/Draft LS reply.docx\n"
+            "        Okt 16 02:32 Inbox/Drafts/\n"
+        ),
+    )
+
+    entries = client.list("Inbox/Drafts")
+
+    assert [entry.name for entry in entries] == ["Draft LS reply.docx"]
+    assert entries[0].size == 32016
+
+
+def test_client_lists_localized_root_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = LftpFtpClient(source())
+    monkeypatch.setattr(
+        client,
+        "_run",
+        lambda script: (
+            " 1664058 Okt 16 14:37 AgendaWithTdocAllocation_2026-10-16_14h37.htm\n"
+            "        Okt 16 15:27 Docs/\n"
+            "        Okt 16 16:45 Inbox/\n"
+        ),
+    )
+
+    entries = client.list("")
+
+    by_name = {entry.name: entry for entry in entries}
+    assert by_name["Docs"].is_dir is True
+    assert by_name["Inbox"].is_dir is True
+    assert (
+        by_name["AgendaWithTdocAllocation_2026-10-16_14h37.htm"].size
+        == 1664058
+    )

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Protocol
@@ -17,22 +18,35 @@ logger = logging.getLogger(__name__)
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _MONTHS = {
-    "Jan": 1,
-    "Feb": 2,
-    "Mar": 3,
-    "Apr": 4,
-    "May": 5,
-    "Jun": 6,
-    "Jul": 7,
-    "Aug": 8,
-    "Sep": 9,
-    "Oct": 10,
-    "Nov": 11,
-    "Dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "mär": 3,
+    "mrz": 3,
+    "apr": 4,
+    "may": 5,
+    "mai": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "set": 9,
+    "oct": 10,
+    "okt": 10,
+    "ott": 10,
+    "nov": 11,
+    "dec": 12,
+    "dez": 12,
+    "dic": 12,
+    "ene": 1,
+    "gen": 1,
+    "abr": 4,
+    "ago": 8,
 }
+_MONTH_TOKEN = r"[^\W\d_]{3,4}\.?"
 _DATE_PATTERN = (
     r"(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?"
-    r"|[A-Z][a-z]{2}\s+\d{1,2}\s+(?:\d{2}:\d{2}|\d{4}))"
+    rf"|{_MONTH_TOKEN}\s+\d{{1,2}}\s+(?:\d{{2}}:\d{{2}}|\d{{4}}))"
 )
 _LS_RE = re.compile(
     rf"^(?P<perms>[bcdlps-][rwxStTs-]{{9}})\s+"
@@ -41,6 +55,13 @@ _LS_RE = re.compile(
     r"(?P<size>\d+)\s+"
     rf"(?P<date>{_DATE_PATTERN})\s+"
     r"(?P<name>.+)$"
+)
+# Servers (e.g. localized IIS) may omit permissions/owner columns.
+_SIZE_DATE_NAME_RE = re.compile(
+    rf"^\s*(?P<size>\d+)\s+(?P<date>{_DATE_PATTERN})\s+(?P<name>.+?)\s*$"
+)
+_DATE_NAME_RE = re.compile(
+    rf"^\s*(?P<date>{_DATE_PATTERN})\s+(?P<name>.+?)\s*$"
 )
 
 
@@ -120,11 +141,11 @@ def _parse_mtime(value: str, now: datetime) -> str | None:
         )
 
     classic = re.fullmatch(
-        r"([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2})", value
+        rf"({_MONTH_TOKEN})\s+(\d{{1,2}})\s+(\d{{2}}):(\d{{2}})", value
     )
     if classic:
         month_name, day, hour, minute = classic.groups()
-        month = _MONTHS.get(month_name)
+        month = _MONTHS.get(month_name.rstrip(".").lower())
         if month is None:
             return None
         year = now.year
@@ -143,10 +164,12 @@ def _parse_mtime(value: str, now: datetime) -> str | None:
             year -= 1
         return f"{year:04d}-{month:02d}-{int(day):02d}T{hour}:{minute}:00"
 
-    old = re.fullmatch(r"([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{4})", value)
+    old = re.fullmatch(
+        rf"({_MONTH_TOKEN})\s+(\d{{1,2}})\s+(\d{{4}})", value
+    )
     if old:
         month_name, day, year = old.groups()
-        month = _MONTHS.get(month_name)
+        month = _MONTHS.get(month_name.rstrip(".").lower())
         if month is None:
             return None
         return f"{int(year):04d}-{month:02d}-{int(day):02d}T00:00:00"
@@ -165,14 +188,32 @@ def parse_ls_listing(
         if not line.strip() or line.startswith("total "):
             continue
         match = _LS_RE.match(line)
-        if match is None:
-            unparsed.append(line)
-            continue
+        if match is not None:
+            name = match.group("name").strip()
+            size: int | None = int(match.group("size"))
+            date = match.group("date")
+            is_dir = match.group("perms").startswith("d")
+            is_symlink = match.group("perms").startswith("l")
+        else:
+            fallback = _SIZE_DATE_NAME_RE.match(line)
+            if fallback is not None:
+                size = int(fallback.group("size"))
+                date = fallback.group("date")
+            else:
+                fallback = _DATE_NAME_RE.match(line)
+                if fallback is None:
+                    unparsed.append(line)
+                    continue
+                size = None
+                date = fallback.group("date")
+            name = fallback.group("name").strip()
+            is_symlink = False
+            is_dir = name.endswith("/")
 
-        name = match.group("name").strip()
-        is_symlink = match.group("perms").startswith("l")
         if is_symlink:
             name = name.split(" -> ", 1)[0].strip()
+        if name.endswith("/"):
+            name = name.rstrip("/")
         if not name or _CONTROL_RE.search(name):
             unparsed.append(line)
             continue
@@ -180,9 +221,9 @@ def parse_ls_listing(
         entries.append(
             RemoteEntry(
                 name=name,
-                size=int(match.group("size")),
-                mtime=_parse_mtime(match.group("date"), reference),
-                is_dir=match.group("perms").startswith("d"),
+                size=size,
+                mtime=_parse_mtime(date, reference),
+                is_dir=is_dir,
                 is_symlink=is_symlink,
                 raw=line,
             )
@@ -244,6 +285,9 @@ class LftpFtpClient:
         return "\n".join(lines) + "\n"
 
     def _run(self, script: str) -> str:
+        environment = dict(os.environ)
+        environment.setdefault("LC_ALL", "C")
+        environment.setdefault("LANG", "C")
         try:
             result = subprocess.run(
                 [self.executable],
@@ -252,6 +296,7 @@ class LftpFtpClient:
                 text=True,
                 timeout=self.timeout,
                 check=False,
+                env=environment,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise FtpError(f"lftp failed to run: {exc}") from exc
@@ -280,10 +325,19 @@ class LftpFtpClient:
 
         safe: list[RemoteEntry] = []
         for entry in entries:
-            if is_safe_remote_name(entry.name):
-                safe.append(entry)
-            else:
-                logger.warning("unsafe remote filename skipped: %r", entry.name)
+            name = entry.name
+            if relative:
+                prefix = relative + "/"
+                if name == relative:
+                    continue
+                if name.startswith(prefix):
+                    name = name[len(prefix) :]
+            if not name:
+                continue
+            if not is_safe_remote_name(name):
+                logger.warning("unsafe remote filename skipped: %r", name)
+                continue
+            safe.append(entry if name == entry.name else replace(entry, name=name))
         return safe
 
     def fetch(self, path: str, dest: Path) -> None:
