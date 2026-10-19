@@ -19,6 +19,7 @@
             python314Packages.pydantic
             python314Packages.openpyxl
             python314Packages.hypothesis
+            python314Packages.httpx
             lftp
           ];
         };
