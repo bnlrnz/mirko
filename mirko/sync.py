@@ -301,7 +301,11 @@ class Syncer:
             prefix="fetch-", dir=self.folder.cache_dir, delete=False
         )
         handle.close()
-        return Path(handle.name)
+        target = Path(handle.name)
+        # lftp refuses to overwrite an existing destination unless clobber is
+        # enabled; remove the placeholder so the download creates the file.
+        target.unlink(missing_ok=True)
+        return target
 
     def _classify(
         self, logical_path: str, directory: str

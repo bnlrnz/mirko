@@ -346,8 +346,9 @@ class LftpFtpClient:
             raise FtpError("cannot fetch an empty remote path")
         script = self._script(
             [
+                "set xfer:clobber on",
                 f"get {_quote_lftp(relative)} "
-                f"-o {_quote_lftp(str(Path(dest)))}"
+                f"-o {_quote_lftp(str(Path(dest)))}",
             ]
         )
         self._run(script)
