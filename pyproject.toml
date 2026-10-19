@@ -12,6 +12,9 @@ dependencies = []
 [tool.setuptools.packages.find]
 include = ["mirko*"]
 
+[tool.setuptools.package-data]
+mirko = ["migrations/*.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
