@@ -61,21 +61,21 @@ def names(connection: sqlite3.Connection, kind: str) -> set[str]:
 
 def test_discover_migrations_is_numbered_and_ordered() -> None:
     migrations = discover_migrations()
-    assert [migration.version for migration in migrations] == [1]
-    assert migrations[0].name == "initial"
+    assert [migration.version for migration in migrations] == [1, 2]
+    assert [migration.name for migration in migrations] == ["initial", "projection_views"]
 
 
 def test_apply_migrations_on_empty_database(tmp_path: Path) -> None:
     connection = connect(tmp_path / "mirko.sqlite", migrate=False)
     try:
         assert schema_version(connection) == 0
-        assert apply_migrations(connection) == [1]
-        assert schema_version(connection) == 1
-        row = connection.execute(
-            "SELECT version, applied_at FROM schema_migration"
-        ).fetchone()
-        assert row["version"] == 1
-        assert row["applied_at"]
+        assert apply_migrations(connection) == [1, 2]
+        assert schema_version(connection) == 2
+        rows = connection.execute(
+            "SELECT version, applied_at FROM schema_migration ORDER BY version"
+        ).fetchall()
+        assert [row["version"] for row in rows] == [1, 2]
+        assert all(row["applied_at"] for row in rows)
     finally:
         connection.close()
 
@@ -86,7 +86,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
         assert apply_migrations(connection) == []
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 2
     finally:
         connection.close()
 
@@ -97,7 +97,7 @@ def test_connect_sets_pragmas_and_schema(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert schema_version(connection) == 1
+        assert schema_version(connection) == 2
     finally:
         connection.close()
 
@@ -109,6 +109,9 @@ def test_expected_tables_and_indices_exist(tmp_path: Path) -> None:
         assert EXPECTED_TABLES.issubset(tables)
         assert {"email_fts", "tdoc_fts"}.issubset(tables)
         assert EXPECTED_INDICES.issubset(names(connection, "index"))
+        assert {"edge_current", "tdoc_current"}.issubset(
+            names(connection, "view")
+        )
     finally:
         connection.close()
 
