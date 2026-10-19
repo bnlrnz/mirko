@@ -42,6 +42,7 @@ export default function App() {
   const [tab, setTab] = useState<CenterTab>("lineage");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exportPath, setExportPath] = useState<string | null>(null);
 
   const refreshStatic = useCallback(async () => {
     try {
@@ -136,6 +137,24 @@ export default function App() {
       setBusy(false);
     }
   }, [refreshStatic, refreshTdocs]);
+
+  const onExport = useCallback(() => {
+    window.open("/api/export/markdown", "_blank", "noopener");
+  }, []);
+
+  const onFinalize = useCallback(async () => {
+    setBusy(true);
+    try {
+      const result = await api.finalize();
+      setExportPath(result.export_path);
+      await refreshStatic();
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshStatic]);
 
   const onTrack = useCallback(
     async (tdoc: string, tracked: boolean) => {
@@ -258,8 +277,11 @@ export default function App() {
         filters={filters}
         sync={sync}
         busy={busy}
+        exportPath={exportPath}
         onFilters={setFilters}
         onSync={onSync}
+        onExport={onExport}
+        onFinalize={onFinalize}
       />
       {error ? (
         <div className="error-banner" role="alert">

@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mirko import __version__
 from mirko import repository
+from mirko.export import export_markdown, finalize, render_markdown
 from mirko.ftp import FtpClient
 from mirko.meeting_folder import MeetingFolder
 from mirko.preflight import check_lftp
@@ -265,6 +266,13 @@ class ConflictResolveRequest(BaseModel):
 class NotePatch(BaseModel):
     body: str | None = None
     position_tag: Literal["Support", "Object", "Clarify"] | None = None
+
+
+class FinalizeResponse(BaseModel):
+    status: str
+    export_path: str
+    mirror_links: int
+    finalized_at: str
 
 
 class SyncResponse(BaseModel):
@@ -572,6 +580,25 @@ def create_app(
         if not deleted:
             raise HTTPException(status_code=404, detail="note not found")
         return Response(status_code=204)
+
+    @app.get("/api/export/markdown", response_class=PlainTextResponse)
+    def get_markdown(include_mail: bool = False) -> PlainTextResponse:
+        content = render_markdown(folder, include_mail=include_mail)
+        return PlainTextResponse(
+            content,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": 'attachment; filename="mirko-export.md"'
+            },
+        )
+
+    @app.post("/api/finalize", response_model=FinalizeResponse)
+    def post_finalize(include_mail: bool = False) -> dict:
+        return finalize(
+            folder,
+            include_mail=include_mail,
+            clock=app.state.clock,
+        )
 
     @app.get("/api/events", include_in_schema=False)
     def get_events() -> Response:

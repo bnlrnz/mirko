@@ -51,6 +51,14 @@ function installFetch() {
       }
       if (url === "/api/sync/status") return json(sync);
       if (url === "/api/sync") return json({ status: "ok" });
+      if (url === "/api/finalize") {
+        return json({
+          status: "finalized",
+          export_path: "exports/mirko-SA3-130-20261016T150000Z.md",
+          mirror_links: 1,
+          finalized_at: "2026-10-16T15:00:00Z",
+        });
+      }
       if (url === "/api/tdocs?state=agreed") return json([tdocs[1]]);
       if (url === "/api/tdocs") return json(tdocs);
       if (url === "/api/tdocs/S3-264203") {
@@ -130,6 +138,13 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Sync Now" })).toBeEnabled();
     });
+  });
+
+  it("finalizes and links the latest export", async () => {
+    render(<App />);
+    const button = await screen.findByRole("button", { name: "Finalize" });
+    fireEvent.click(button);
+    expect(await screen.findByText("latest export")).toBeInTheDocument();
   });
 
   it("lists conflicts and resolves them", async () => {

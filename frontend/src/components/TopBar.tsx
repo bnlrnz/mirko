@@ -5,8 +5,11 @@ interface Props {
   filters: Filters;
   sync: SyncStatus | null;
   busy: boolean;
+  exportPath: string | null;
   onFilters: (filters: Filters) => void;
   onSync: () => void;
+  onExport: () => void;
+  onFinalize: () => void;
 }
 
 function freshness(value: string | null | undefined): string {
@@ -22,8 +25,11 @@ export function TopBar({
   filters,
   sync,
   busy,
+  exportPath,
   onFilters,
   onSync,
+  onExport,
+  onFinalize,
 }: Props) {
   return (
     <header className="top-bar">
@@ -50,6 +56,17 @@ export function TopBar({
       >
         {busy ? "Syncing…" : "Sync Now"}
       </button>
+      <button type="button" onClick={onExport}>
+        Export
+      </button>
+      <button type="button" onClick={onFinalize} disabled={busy}>
+        Finalize
+      </button>
+      {exportPath ? (
+        <a className="export-link" href={`/${exportPath}`}>
+          latest export
+        </a>
+      ) : null}
       <div className={`sync-chip health-${sync?.health ?? "unknown"}`}>
         <span className="sync-dot" aria-hidden="true" />
         <span title={sync?.endpoint ?? ""}>
