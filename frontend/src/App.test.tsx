@@ -98,7 +98,7 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Lineage" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Discovery" })).toBeInTheDocument();
-    expect(screen.getByText("ftp://10.10.10.10:21/ftp/SA/SA3")).toBeInTheDocument();
+    expect(screen.getByText("ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3")).toBeInTheDocument();
   });
 
   it("selects a TDoc and shows its detail and timeline", async () => {

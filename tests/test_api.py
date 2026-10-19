@@ -27,7 +27,7 @@ def minimal_config() -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
     }
@@ -56,7 +56,7 @@ def test_meeting_endpoint(client: TestClient) -> None:
         "hours": {"start": "09:00", "end": "18:00"},
         "tdoc_series_prefix": "S3-26",
         "source_kind": "local",
-        "endpoint": "ftp://10.10.10.10:21/ftp/SA/SA3",
+        "endpoint": "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3",
     }
 
 

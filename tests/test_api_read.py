@@ -54,7 +54,7 @@ def minimal_config(mbox_path: Path) -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
         "mail": {"kind": "mbox", "path": str(mbox_path)},
@@ -280,7 +280,7 @@ def test_sync_status_exposes_freshness_and_counts(client: TestClient) -> None:
     response = client.get("/api/sync/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["endpoint"] == "ftp://10.10.10.10:21/ftp/SA/SA3"
+    assert data["endpoint"] == "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3"
     assert data["interval_s"] == 45
     assert data["counts"]["tdocs"] >= 3
     assert data["counts"]["emails"] == 2

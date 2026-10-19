@@ -29,7 +29,7 @@ def base_config(mail: dict) -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
         "mail": mail,

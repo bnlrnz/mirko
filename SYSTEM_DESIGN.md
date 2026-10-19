@@ -135,7 +135,7 @@ everything; no absolute paths are stored.
     "protocol": "ftp",
     "host": "10.10.10.10",
     "port": 21,
-    "base_path": "/ftp/SA/SA3",
+    "base_path": "/Meetings_3GPP_SYNC/SA3",
     "username": "anonymous",
     "password": null,
     "password_env": null,
@@ -182,7 +182,7 @@ Known endpoint presets (documentation only; still one active at a time):
 |---|---|---|---|
 | `local` | `10.10.10.10` | anonymous | Default during meeting. Full view. |
 | `remote` | short-lived e.g. `o2arena_prague.3gpp.org` | meeting credentials via env | Lagging mirror; chosen manually. |
-| `public` | `https://www.3gpp.org/ftp/Meetings_3GPP_SYNC/SA3/` | anonymous | Can see `Drafts/`; lags. |
+| `public` | `ftp://ftp.3gpp.org/Meetings_3GPP_SYNC/SA3/` | anonymous | Can see `Drafts/`; lags. |
 
 ---
 

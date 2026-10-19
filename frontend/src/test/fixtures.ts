@@ -19,7 +19,7 @@ export const meeting: Meeting = {
   hours: { start: "09:00", end: "18:00" },
   tdoc_series_prefix: "S3-26",
   source_kind: "local",
-  endpoint: "ftp://10.10.10.10:21/ftp/SA/SA3",
+  endpoint: "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3",
 };
 
 export const tdocs: TdocSummary[] = [
@@ -292,7 +292,7 @@ export const conflicts: Conflict[] = [
 ];
 
 export const sync: SyncStatus = {
-  endpoint: "ftp://10.10.10.10:21/ftp/SA/SA3",
+  endpoint: "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3",
   health: "ok",
   last_attempt_at: "2026-10-16T12:00:00.000000Z",
   last_success_at: "2026-10-16T12:00:00.000000Z",

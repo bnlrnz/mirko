@@ -27,7 +27,7 @@ def minimal_config() -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
     }
@@ -106,7 +106,7 @@ def test_artifact_classification_and_provenance(tmp_path: Path) -> None:
     assert draft["is_ephemeral"] == 1
     assert draft["status"] == "present"
     assert draft["source_kind"] == "local"
-    assert draft["endpoint_id"] == "ftp://10.10.10.10:21/ftp/SA/SA3"
+    assert draft["endpoint_id"] == "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3"
 
     inbox = artifact_by_path(folder, "Inbox/final.zip")
     assert inbox["kind"] == "inbox_document"

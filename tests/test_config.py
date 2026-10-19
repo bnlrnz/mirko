@@ -34,7 +34,7 @@ def minimal_config() -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
     }
@@ -55,7 +55,7 @@ def test_minimal_config_uses_defaults() -> None:
     assert config.ui == UiSettings()
     assert config.tracked_seed == ()
     assert config.warnings == ()
-    assert config.source.endpoint_id == "ftp://10.10.10.10:21/ftp/SA/SA3"
+    assert config.source.endpoint_id == "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3"
 
 
 def test_full_config_maps_all_sections() -> None:
@@ -192,7 +192,7 @@ def test_duplicate_meeting_days_warn() -> None:
         ("host", "", "source.host"),
         ("host", "ftp.example.org\nEVIL", "control characters"),
         ("base_path", "relative/path", "must start with '/'"),
-        ("base_path", "/ftp/../etc", "must not contain '..'"),
+        ("base_path", "/Meetings_3GPP_SYNC/../etc", "must not contain '..'"),
         ("tls", "maybe", "source.tls"),
         ("port", 0, "between 1 and 65535"),
         ("port", 70000, "between 1 and 65535"),
@@ -267,7 +267,7 @@ def test_endpoint_id_uses_protocol_default_port() -> None:
     data["source"].pop("port")
     config = validate_config(data)
     assert config.source.effective_port() == 443
-    assert config.source.endpoint_id == "https://10.10.10.10:443/ftp/SA/SA3"
+    assert config.source.endpoint_id == "https://10.10.10.10:443/Meetings_3GPP_SYNC/SA3"
 
 
 def test_mail_validation() -> None:

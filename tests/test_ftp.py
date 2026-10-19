@@ -35,7 +35,7 @@ def source(**overrides: object) -> SourceSettings:
         "protocol": "ftp",
         "host": "10.10.10.10",
         "port": 21,
-        "base_path": "/ftp/SA/SA3",
+        "base_path": "/Meetings_3GPP_SYNC/SA3",
         "username": "anonymous",
         "password": "s3cret",
         "tls": "none",
@@ -174,7 +174,7 @@ def test_lftp_list_builds_safe_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "shell" not in captured["kwargs"]
     script = captured["kwargs"]["input"]
     assert 'open "ftp://anonymous:s3cret@10.10.10.10:21"' in script
-    assert 'cd "/ftp/SA/SA3"' in script
+    assert 'cd "/Meetings_3GPP_SYNC/SA3"' in script
     assert 'cls -l "Drafts"' in script
     assert "s3cret" not in captured["args"]
 

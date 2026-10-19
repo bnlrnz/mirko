@@ -47,7 +47,7 @@ def minimal_config() -> dict:
             "protocol": "ftp",
             "host": "10.10.10.10",
             "port": 21,
-            "base_path": "/ftp/SA/SA3",
+            "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
     }
@@ -150,7 +150,7 @@ def test_ingest_records_documents_and_provenance(folder: MeetingFolder) -> None:
         assert runs[0]["path"] == "Inbox/agenda.htm"
         assert runs[0]["row_count"] == 2
         assert runs[0]["content_hash"] == result.content_hash
-        assert runs[0]["endpoint_id"] == "ftp://10.10.10.10:21/ftp/SA/SA3"
+        assert runs[0]["endpoint_id"] == "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3"
     finally:
         connection.close()
 

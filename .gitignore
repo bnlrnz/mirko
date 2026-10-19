@@ -29,3 +29,6 @@ frontend/dist/
 # Playwright
 frontend/test-results/
 frontend/playwright-report/
+
+# Local meeting folders created for manual testing
+meetings/
