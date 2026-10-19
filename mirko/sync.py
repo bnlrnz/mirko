@@ -316,7 +316,7 @@ class Syncer:
             return "working_draft", True
         if fnmatch.fnmatchcase(logical_path, config.paths.agenda_glob):
             return "agenda_html", False
-        if logical_path == config.paths.excel:
+        if fnmatch.fnmatchcase(logical_path, config.paths.excel):
             return "allocation_excel", False
         inbox = normalize_remote_path(config.paths.inbox)
         if directory == inbox or directory.startswith(f"{inbox}/"):

@@ -20,6 +20,7 @@ from mirko.sync import SyncReport, Syncer
 class SyncCycleResult:
     status: str
     sync: SyncReport | None = None
+    excel: str | None = None
     agenda: str | None = None
     drafts: FilenameIngestResult | None = None
     mail: MailIngestResult | None = None
@@ -33,6 +34,7 @@ class SyncCycleResult:
         return {
             "status": self.status,
             "fetched": self.fetched,
+            "excel": self.excel,
             "agenda": self.agenda,
             "drafts": {
                 "processed": self.drafts.processed,
@@ -80,6 +82,7 @@ class SyncWorker:
         attempted_at = _timestamp(self.clock())
         errors: list[str] = []
         report: SyncReport | None = None
+        excel_status: str | None = None
         agenda_status: str | None = None
         drafts: FilenameIngestResult | None = None
         mail: MailIngestResult | None = None
@@ -101,6 +104,12 @@ class SyncWorker:
             errors.append(str(exc))
             self._record_state(attempted_at, str(exc), failed=True)
             return SyncCycleResult(status="error", errors=tuple(errors))
+
+        try:
+            excel_status = self._ingest_excel()
+        except Exception as exc:  # noqa: BLE001 - keep previous projection
+            errors.append(f"excel: {exc}")
+            excel_status = "stale"
 
         try:
             agenda_status = self._ingest_latest_agenda()
@@ -130,11 +139,30 @@ class SyncWorker:
         return SyncCycleResult(
             status=status,
             sync=report,
+            excel=excel_status,
             agenda=agenda_status,
             drafts=drafts,
             mail=mail,
             errors=tuple(errors),
         )
+
+    def _ingest_excel(self) -> str | None:
+        connection = self.folder.connect()
+        try:
+            artifact = connection.execute(
+                "SELECT logical_path, filename, blob_hash FROM artifact "
+                "WHERE kind = 'allocation_excel' AND blob_hash IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            connection.close()
+        if artifact is None:
+            return None
+        raw = self.blobs.path_for(artifact["blob_hash"]).read_bytes()
+        result = AgendaIngestor(self.folder, clock=self.clock).ingest_excel(
+            raw, path=artifact["logical_path"]
+        )
+        return result.status
 
     def _ingest_latest_agenda(self) -> str | None:
         connection = self.folder.connect()

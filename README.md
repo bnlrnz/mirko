@@ -23,12 +23,15 @@ The authoritative design is [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md); the glossary
 ## Backend
 
 Python 3.14, FastAPI, SQLite. The sync worker runs serially: remote manifest diff →
-`lftp` fetch → blob cache → HTML/filename/mail ingestion → assertions and conflicts.
+`lftp` fetch → blob cache → Excel/HTML/filename/mail ingestion → assertions and
+conflicts.
 
 - `mirko/config.py`, `meeting_folder.py` — validated config and folder layout.
 - `mirko/migrations/` — schema plus `edge_current` / `tdoc_current` views.
 - `mirko/ingest/agenda_html.py`, `agenda_ingest.py` — agenda parsing, lineage/state
   assertions, conflict detection, projections.
+- `mirko/ingest/excel_ingest.py` — pre-meeting allocation workbook (openpyxl) that
+  seeds TDocs ahead of the HTML agenda; fills gaps only, never overwrites HTML.
 - `mirko/ingest/filename.py`, `filename_ingest.py` — filename parser, ephemeral draft
   artifacts, provisional numbers and ghost hints.
 - `mirko/ingest/mail_subject.py`, `mail_ingest.py` — RFC2047 subjects/threading and

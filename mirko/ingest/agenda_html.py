@@ -621,29 +621,21 @@ def _extract_timestamp(text: str) -> str | None:
     return f"{year}-{month}-{day}T{hour}:{minute}:00"
 
 
-def parse_agenda_html(
-    html: str | bytes, *, encoding: str | None = None
-) -> AgendaParseResult:
-    """Parse an agenda/allocation HTML document.
+def interpret_rows(
+    mapped_rows: list[dict[str, _Cell]],
+) -> tuple[list[AgendaRow], list[LineageIssue]]:
+    """Turn header-mapped cells into agenda rows.
 
-    ``html`` may be bytes (decoded using the declared/utf-8/cp1252 fallback
-    chain) or an already-decoded string.
+    Each item maps canonical column keys to cells. This is shared by the HTML
+    parser (which maps ``<TH>``/``<TD>`` cells) and the Excel parser so that
+    both sources interpret values identically.
     """
-    text = _decode(html, encoding) if isinstance(html, bytes) else html
-
-    parser = _TableParser()
-    parser.feed(text)
-    parser.finish()
-
     rows: list[AgendaRow] = []
     current_agenda: str | None = None
     current_topic: str | None = None
     issues: list[LineageIssue] = []
 
-    for cells in parser.rows:
-        # Rows with fewer/more than the canonical 13 cells are still tolerated.
-        mapped = _map_cells(cells, parser.header)
-
+    for mapped in mapped_rows:
         agenda = normalize_text(mapped.get("agenda", _Cell()).text)
         topic = normalize_text(mapped.get("topic", _Cell()).text)
         if agenda:
@@ -712,6 +704,26 @@ def parse_agenda_html(
                 raw=raw,
             )
         )
+
+    return rows, issues
+
+
+def parse_agenda_html(
+    html: str | bytes, *, encoding: str | None = None
+) -> AgendaParseResult:
+    """Parse an agenda/allocation HTML document.
+
+    ``html`` may be bytes (decoded using the declared/utf-8/cp1252 fallback
+    chain) or an already-decoded string.
+    """
+    text = _decode(html, encoding) if isinstance(html, bytes) else html
+
+    parser = _TableParser()
+    parser.feed(text)
+    parser.finish()
+
+    mapped_rows = [_map_cells(cells, parser.header) for cells in parser.rows]
+    rows, issues = interpret_rows(mapped_rows)
 
     edges, lineage_issues = derive_lineage(rows)
     issues.extend(lineage_issues)

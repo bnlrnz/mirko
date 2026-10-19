@@ -18,10 +18,12 @@ from mirko.ingest.agenda_html import (
     parse_agenda_html,
     timestamp_from_filename,
 )
+from mirko.ingest.excel_ingest import parse_allocation_excel
 from mirko.meeting_folder import MeetingFolder
 
 LINEAGE_PREDICATES = ("revision_of", "merged_into", "based_on")
 INGEST_KIND = "agenda_html"
+EXCEL_KIND = "allocation_excel"
 
 
 @dataclass(frozen=True)
@@ -77,9 +79,9 @@ def _assertion_key(
     )
 
 
-def _state_source(row: AgendaRow) -> str:
+def _state_source(row: AgendaRow, source: str) -> str:
     raw_decision = (row.raw.get("decision") or "").strip()
-    return "html" if raw_decision else "inferred"
+    return source if raw_decision else "inferred"
 
 
 class AgendaIngestor:
@@ -99,12 +101,47 @@ class AgendaIngestor:
         else:
             raw = bytes(html)
             parsed = parse_agenda_html(raw)
+        return self._persist(
+            parsed,
+            raw=raw,
+            kind=INGEST_KIND,
+            source="html",
+            path=path,
+        )
+
+    def ingest_excel(
+        self, data: bytes, *, path: str | None = None
+    ) -> AgendaIngestResult:
+        """Ingest the pre-meeting allocation workbook.
+
+        Excel is prep data: it fills gaps but never overwrites a value already
+        projected from the authoritative HTML agenda.
+        """
+        raw = bytes(data)
+        parsed = parse_allocation_excel(raw)
+        return self._persist(
+            parsed,
+            raw=raw,
+            kind=EXCEL_KIND,
+            source="excel",
+            path=path,
+        )
+
+    def _persist(
+        self,
+        parsed: AgendaParseResult,
+        *,
+        raw: bytes,
+        kind: str,
+        source: str,
+        path: str | None,
+    ) -> AgendaIngestResult:
         content_hash = hashlib.sha256(raw).hexdigest()
         observed_at = _utc_timestamp(self.clock())
 
         connection = self.folder.connect()
         try:
-            previous = self._latest_run(connection)
+            previous = self._latest_run(connection, kind)
             if previous is not None and previous["content_hash"] == content_hash:
                 return AgendaIngestResult(
                     status="unchanged",
@@ -119,6 +156,7 @@ class AgendaIngestor:
 
             run_id = self._start_run(
                 connection,
+                kind=kind,
                 path=path,
                 observed_at=observed_at,
                 content_hash=content_hash,
@@ -129,6 +167,7 @@ class AgendaIngestor:
                 parsed,
                 run_id=run_id,
                 observed_at=observed_at,
+                source=source,
             )
             self._sync_lineage(
                 connection,
@@ -136,6 +175,7 @@ class AgendaIngestor:
                 path=path,
                 content_hash=content_hash,
                 observed_at=observed_at,
+                source=source,
             )
             self._sync_decisions(
                 connection,
@@ -143,10 +183,12 @@ class AgendaIngestor:
                 path=path,
                 content_hash=content_hash,
                 observed_at=observed_at,
+                source=source,
             )
-            self._reconcile_conflicts(
-                connection, parsed, observed_at=observed_at
-            )
+            if source == "html":
+                self._reconcile_conflicts(
+                    connection, parsed, observed_at=observed_at
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -165,18 +207,19 @@ class AgendaIngestor:
             issues=tuple(parsed.issues),
         )
 
-    def _latest_run(self, connection: sqlite3.Connection):
+    def _latest_run(self, connection: sqlite3.Connection, kind: str):
         return connection.execute(
             "SELECT id, content_hash, row_count FROM ingest_run "
             "WHERE kind = ? AND status IN ('success', 'unchanged') "
             "ORDER BY id DESC LIMIT 1",
-            (INGEST_KIND,),
+            (kind,),
         ).fetchone()
 
     def _start_run(
         self,
         connection: sqlite3.Connection,
         *,
+        kind: str,
         path: str | None,
         observed_at: str,
         content_hash: str,
@@ -187,7 +230,7 @@ class AgendaIngestor:
             "kind, endpoint_id, path, fetched_at, content_hash, row_count, status"
             ") VALUES (?, ?, ?, ?, ?, ?, 'success')",
             (
-                INGEST_KIND,
+                kind,
                 self.folder.config.source.endpoint_id,
                 path,
                 observed_at,
@@ -204,9 +247,18 @@ class AgendaIngestor:
         *,
         run_id: int,
         observed_at: str,
+        source: str,
     ) -> None:
+        if source == "excel":
+            self._upsert_documents_excel(
+                connection,
+                parsed,
+                run_id=run_id,
+                observed_at=observed_at,
+            )
+            return
         for row in parsed.rows:
-            state_source = _state_source(row)
+            state_source = _state_source(row, source)
             raw_meta = json.dumps(
                 {
                     "raw": row.raw,
@@ -260,6 +312,72 @@ class AgendaIngestor:
                 ),
             )
 
+    def _upsert_documents_excel(
+        self,
+        connection: sqlite3.Connection,
+        parsed: AgendaParseResult,
+        *,
+        run_id: int,
+        observed_at: str,
+    ) -> None:
+        for row in parsed.rows:
+            state_source = _state_source(row, "excel")
+            raw_meta = json.dumps(
+                {
+                    "raw": row.raw,
+                    "zip_path": row.zip_path,
+                    "ingest_run_id": run_id,
+                    "source_timestamp": parsed.source_timestamp,
+                },
+                ensure_ascii=False,
+            )
+            connection.execute(
+                "INSERT INTO tdoc("
+                "tdoc_number, agenda_item, topic, title, source, type, "
+                "for_action, avail, treated, treated_note, decision, "
+                "state_source, first_seen_at, last_seen_at, is_tracked, "
+                "is_provisional, raw_meta"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?) "
+                "ON CONFLICT(tdoc_number) DO UPDATE SET "
+                "agenda_item = COALESCE(NULLIF(excluded.agenda_item, ''), "
+                "tdoc.agenda_item), "
+                "topic = COALESCE(NULLIF(excluded.topic, ''), tdoc.topic), "
+                "title = COALESCE(NULLIF(excluded.title, ''), tdoc.title), "
+                "source = COALESCE(NULLIF(excluded.source, ''), tdoc.source), "
+                "type = COALESCE(NULLIF(excluded.type, ''), tdoc.type), "
+                "for_action = COALESCE(NULLIF(excluded.for_action, ''), "
+                "tdoc.for_action), "
+                "avail = COALESCE(excluded.avail, tdoc.avail), "
+                "treated = COALESCE(excluded.treated, tdoc.treated), "
+                "treated_note = COALESCE(NULLIF(excluded.treated_note, ''), "
+                "tdoc.treated_note), "
+                "decision = CASE WHEN tdoc.state_source = 'html' "
+                "THEN tdoc.decision ELSE excluded.decision END, "
+                "state_source = CASE WHEN tdoc.state_source = 'html' "
+                "THEN tdoc.state_source ELSE excluded.state_source END, "
+                "last_seen_at = excluded.last_seen_at, "
+                "is_provisional = 0, "
+                "raw_meta = CASE WHEN tdoc.state_source = 'html' "
+                "THEN tdoc.raw_meta ELSE excluded.raw_meta END",
+                (
+                    row.tdoc,
+                    row.agenda_item,
+                    row.topic,
+                    row.title,
+                    row.source,
+                    row.type,
+                    row.for_action,
+                    None if row.avail is None else int(row.avail),
+                    None if row.treated is None else int(row.treated),
+                    row.treated_note,
+                    row.decision,
+                    state_source,
+                    observed_at,
+                    observed_at,
+                    raw_meta,
+                ),
+            )
+
     def _sync_lineage(
         self,
         connection: sqlite3.Connection,
@@ -268,7 +386,9 @@ class AgendaIngestor:
         path: str | None,
         content_hash: str,
         observed_at: str,
+        source: str,
     ) -> None:
+        verified_source = source == "html"
         desired: dict[tuple[str, str, str, str, str], dict] = {}
         for edge in parsed.edges:
             key = _assertion_key(
@@ -280,8 +400,10 @@ class AgendaIngestor:
                 "object_kind": "tdoc",
                 "object_ref": edge.target,
                 "value": None,
-                "confidence": edge.confidence,
-                "verified": edge.verified,
+                "confidence": edge.confidence
+                if verified_source
+                else min(edge.confidence, 0.5),
+                "verified": edge.verified and verified_source,
                 "detail": json.dumps(
                     {
                         "reason": edge.reason,
@@ -295,6 +417,7 @@ class AgendaIngestor:
             connection,
             desired,
             predicates=LINEAGE_PREDICATES,
+            source=source,
             source_ref=path or content_hash,
             observed_at=observed_at,
         )
@@ -307,11 +430,12 @@ class AgendaIngestor:
         path: str | None,
         content_hash: str,
         observed_at: str,
+        source: str,
     ) -> None:
         desired: dict[tuple[str, str, str, str, str], dict] = {}
         for row in parsed.rows:
-            state_source = _state_source(row)
-            verified = state_source == "html"
+            state_source = _state_source(row, source)
+            verified = source == "html" and state_source == "html"
             decision = row.decision or "open"
             key = _assertion_key(row.tdoc, "decision", None, None, decision)
             desired[key] = {
@@ -335,6 +459,7 @@ class AgendaIngestor:
             connection,
             desired,
             predicates=("decision",),
+            source=source,
             source_ref=path or content_hash,
             observed_at=observed_at,
         )
@@ -467,16 +592,17 @@ class AgendaIngestor:
         desired: dict[tuple[str, str, str, str, str], dict],
         *,
         predicates: tuple[str, ...],
+        source: str,
         source_ref: str,
         observed_at: str,
     ) -> None:
         placeholders = ", ".join("?" for _ in predicates)
         rows = connection.execute(
             "SELECT id, subject_ref, predicate, object_kind, object_ref, value "
-            "FROM assertion WHERE source = 'html' AND subject_kind = 'tdoc' "
+            "FROM assertion WHERE source = ? AND subject_kind = 'tdoc' "
             "AND active = 1 AND muted = 0 "
             f"AND predicate IN ({placeholders})",
-            predicates,
+            (source, *predicates),
         ).fetchall()
 
         existing: dict[tuple[str, str, str, str, str], int] = {}
@@ -499,13 +625,14 @@ class AgendaIngestor:
                 "subject_kind, subject_ref, predicate, object_kind, object_ref, "
                 "value, source, source_ref, confidence, verified, active, muted, "
                 "observed_at, detail"
-                ") VALUES ('tdoc', ?, ?, ?, ?, ?, 'html', ?, ?, ?, 1, 0, ?, ?)",
+                ") VALUES ('tdoc', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)",
                 (
                     spec["subject_ref"],
                     spec["predicate"],
                     spec["object_kind"],
                     spec["object_ref"],
                     spec["value"],
+                    source,
                     source_ref,
                     spec["confidence"],
                     int(bool(spec["verified"])),
@@ -529,3 +656,29 @@ class AgendaIngestor:
                 "WHERE id = ?",
                 (superseded_by, assertion_id),
             )
+
+        if source == "html":
+            self._retire_excel_assertions(
+                connection, desired, predicates=predicates
+            )
+
+    def _retire_excel_assertions(
+        self,
+        connection: sqlite3.Connection,
+        desired: dict[tuple[str, str, str, str, str], dict],
+        *,
+        predicates: tuple[str, ...],
+    ) -> None:
+        subjects = sorted({key[0] for key in desired})
+        if not subjects:
+            return
+        subject_placeholders = ", ".join("?" for _ in subjects)
+        predicate_placeholders = ", ".join("?" for _ in predicates)
+        connection.execute(
+            "UPDATE assertion SET active = 0, muted = 1 "
+            "WHERE source = 'excel' AND subject_kind = 'tdoc' "
+            "AND active = 1 AND muted = 0 "
+            f"AND subject_ref IN ({subject_placeholders}) "
+            f"AND predicate IN ({predicate_placeholders})",
+            (*subjects, *predicates),
+        )
