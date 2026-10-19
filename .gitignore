@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+
+# Local Meeting Data & Databases
+*.db
+*.sqlite3
+cache/
+downloads/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
