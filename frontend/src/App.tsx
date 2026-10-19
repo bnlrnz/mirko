@@ -6,6 +6,8 @@ import { DetailPanel } from "./components/DetailPanel";
 import { LeftRail } from "./components/LeftRail";
 import { TopBar } from "./components/TopBar";
 import type {
+  Conflict,
+  ConflictResolution,
   DiscoveryItem,
   Filters,
   Lineage,
@@ -35,6 +37,7 @@ export default function App() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
   const [discovery, setDiscovery] = useState<DiscoveryItem[]>([]);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [tab, setTab] = useState<CenterTab>("lineage");
   const [error, setError] = useState<string | null>(null);
@@ -42,17 +45,19 @@ export default function App() {
 
   const refreshStatic = useCallback(async () => {
     try {
-      const [meetingData, lineageData, discoveryData, syncData] =
+      const [meetingData, lineageData, discoveryData, syncData, conflictData] =
         await Promise.all([
           api.meeting(),
           api.lineage(filters.tracked),
           api.discovery(),
           api.syncStatus(),
+          api.conflicts(),
         ]);
       setMeeting(meetingData);
       setLineage(lineageData);
       setDiscovery(discoveryData);
       setSync(syncData);
+      setConflicts(conflictData);
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -169,6 +174,83 @@ export default function App() {
     [refreshTdocs, selected],
   );
 
+  const refreshDetail = useCallback(async () => {
+    if (!selected) {
+      return;
+    }
+    const [detailData, events] = await Promise.all([
+      api.tdoc(selected),
+      api.timeline(selected),
+    ]);
+    setDetail(detailData);
+    setTimeline(events);
+  }, [selected]);
+
+  const onDeleteNote = useCallback(
+    async (noteId: number) => {
+      try {
+        await api.deleteNote(noteId);
+        await Promise.all([refreshDetail(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshDetail, refreshTdocs],
+  );
+
+  const onAddAssertion = useCallback(
+    async (subject: string, predicate: string, object: string) => {
+      try {
+        await api.addAssertion({
+          subject_ref: subject,
+          predicate,
+          object_kind: "tdoc",
+          object_ref: object,
+        });
+        await Promise.all([refreshDetail(), refreshStatic(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshDetail, refreshStatic, refreshTdocs],
+  );
+
+  const onResolveConflict = useCallback(
+    async (id: number, resolution: ConflictResolution) => {
+      try {
+        await api.resolveConflict(id, resolution);
+        await Promise.all([refreshStatic(), refreshDetail(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshDetail, refreshStatic, refreshTdocs],
+  );
+
+  const onPromote = useCallback(
+    async (item: DiscoveryItem) => {
+      try {
+        if (item.action === "track" && item.tdocs[0]) {
+          await api.track(item.tdocs[0], true);
+        } else if (item.action === "promote" && item.assertion_id) {
+          await api.updateAssertion(item.assertion_id, {
+            active: true,
+            muted: false,
+          });
+        }
+        await Promise.all([refreshStatic(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshStatic, refreshTdocs],
+  );
+
+  const selectedConflicts = useMemo(
+    () => conflicts.filter((item) => item.subject_ref === selected),
+    [conflicts, selected],
+  );
+
   return (
     <div className="app-shell">
       <TopBar
@@ -199,15 +281,21 @@ export default function App() {
           lineage={lineage}
           timeline={timeline}
           discovery={discovery}
-          conflicts={detail?.has_conflict ? 1 : 0}
+          conflicts={conflicts}
           selected={selected}
           onSelect={setSelected}
+          onResolve={onResolveConflict}
+          onPromote={onPromote}
         />
         <DetailPanel
           detail={detail}
           includeEphemeral={filters.includeEphemeral}
+          conflicts={selectedConflicts}
           onTrack={onTrack}
           onAddNote={onAddNote}
+          onDeleteNote={onDeleteNote}
+          onAddAssertion={onAddAssertion}
+          onResolveConflict={onResolveConflict}
           onSelect={setSelected}
         />
       </main>

@@ -246,6 +246,11 @@ def test_lineage_tracked_and_full(client: TestClient) -> None:
     full = client.get("/api/lineage").json()
     assert any(node["tdoc_number"] == "S3-264999" for node in full["nodes"])
 
+    with_inactive = client.get(
+        "/api/lineage", params={"include_inactive": "true"}
+    ).json()
+    assert any(edge["active"] is False for edge in with_inactive["edges"])
+
 
 def test_mail_filters_and_search(client: TestClient) -> None:
     by_tdoc = client.get("/api/mail", params={"tdoc": "S3-264202"}).json()

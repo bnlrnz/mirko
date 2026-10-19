@@ -144,6 +144,9 @@ class AgendaIngestor:
                 content_hash=content_hash,
                 observed_at=observed_at,
             )
+            self._reconcile_conflicts(
+                connection, parsed, observed_at=observed_at
+            )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -334,6 +337,128 @@ class AgendaIngestor:
             predicates=("decision",),
             source_ref=path or content_hash,
             observed_at=observed_at,
+        )
+
+    def _reconcile_conflicts(
+        self,
+        connection: sqlite3.Connection,
+        parsed: AgendaParseResult,
+        *,
+        observed_at: str,
+    ) -> None:
+        html_rows = connection.execute(
+            "SELECT id, subject_ref, value FROM assertion "
+            "WHERE source = 'html' AND predicate = 'decision' "
+            "AND active = 1 AND muted = 0"
+        ).fetchall()
+        html_by_subject = {
+            row["subject_ref"]: (int(row["id"]), row["value"])
+            for row in html_rows
+        }
+        user_rows = connection.execute(
+            "SELECT id, subject_ref, value FROM assertion "
+            "WHERE source = 'user' AND predicate = 'decision' "
+            "AND active = 1 AND muted = 0"
+        ).fetchall()
+        for user in user_rows:
+            subject = user["subject_ref"]
+            if subject not in html_by_subject:
+                continue
+            html_id, html_value = html_by_subject[subject]
+            if html_value == user["value"]:
+                connection.execute(
+                    "UPDATE assertion SET verified = 1 WHERE id = ?",
+                    (int(user["id"]),),
+                )
+                self._close_conflict(
+                    connection,
+                    "decision",
+                    subject,
+                    resolution="html_agrees",
+                    observed_at=observed_at,
+                )
+            else:
+                self._open_conflict(
+                    connection,
+                    "decision",
+                    subject,
+                    (int(user["id"]), html_id),
+                    observed_at=observed_at,
+                    detail=f"html={html_value!r} user={user['value']!r}",
+                )
+
+        for issue in parsed.issues:
+            if issue.tdoc is None:
+                continue
+            predicate = (
+                "lineage"
+                if issue.kind in {"missing_replaced_by", "revision_conflict"}
+                else issue.kind
+            )
+            self._open_conflict(
+                connection,
+                predicate,
+                issue.tdoc,
+                (),
+                observed_at=observed_at,
+                detail=issue.detail,
+            )
+
+    def _open_conflict(
+        self,
+        connection: sqlite3.Connection,
+        predicate: str,
+        subject_ref: str,
+        assertion_ids: tuple[int, ...],
+        *,
+        observed_at: str,
+        detail: str,
+    ) -> None:
+        existing = connection.execute(
+            "SELECT id, assertion_ids FROM conflict "
+            "WHERE predicate = ? AND subject_ref = ? AND status = 'open'",
+            (predicate, subject_ref),
+        ).fetchone()
+        merged_ids: list[int] = []
+        if existing is not None:
+            try:
+                merged_ids = [
+                    int(value)
+                    for value in json.loads(existing["assertion_ids"] or "[]")
+                ]
+            except (ValueError, TypeError):
+                merged_ids = []
+        for assertion_id in assertion_ids:
+            if assertion_id not in merged_ids:
+                merged_ids.append(assertion_id)
+        payload = json.dumps(merged_ids)
+        if existing is not None:
+            connection.execute(
+                "UPDATE conflict SET assertion_ids = ? WHERE id = ?",
+                (payload, int(existing["id"])),
+            )
+            return
+        connection.execute(
+            "INSERT INTO conflict("
+            "predicate, subject_ref, assertion_ids, status, created_at"
+            ") VALUES (?, ?, ?, 'open', ?)",
+            (predicate, subject_ref, payload, observed_at),
+        )
+
+    def _close_conflict(
+        self,
+        connection: sqlite3.Connection,
+        predicate: str,
+        subject_ref: str,
+        *,
+        resolution: str,
+        observed_at: str,
+    ) -> None:
+        connection.execute(
+            "UPDATE conflict SET status = 'resolved', resolution = ?, "
+            "resolved_at = ? "
+            "WHERE predicate = ? AND subject_ref = ? AND status = 'open'",
+            (resolution, observed_at, predicate, subject_ref),
         )
 
     def _sync_assertions(

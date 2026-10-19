@@ -167,6 +167,8 @@ class LineageEdge(BaseModel):
     confidence: float
     verified: bool
     source_ref: str | None = None
+    active: bool = True
+    muted: bool = False
 
 
 class LineageResponse(BaseModel):
@@ -207,6 +209,62 @@ class NoteResponse(BaseModel):
     source: str
     created_at: str
     updated_at: str
+
+
+class AssertionResponse(BaseModel):
+    id: int
+    subject_kind: str
+    subject_ref: str
+    predicate: str
+    object_kind: str | None = None
+    object_ref: str | None = None
+    value: str | None = None
+    source: str
+    source_ref: str | None = None
+    confidence: float
+    verified: bool
+    active: bool
+    muted: bool
+    superseded_by: int | None = None
+    observed_at: str
+    detail: Any = None
+
+
+class ConflictResponse(BaseModel):
+    id: int
+    predicate: str
+    subject_ref: str
+    status: str
+    resolution: str | None = None
+    created_at: str
+    resolved_at: str | None = None
+    assertions: list[AssertionResponse] = []
+
+
+class AssertionRequest(BaseModel):
+    subject_kind: str = "tdoc"
+    subject_ref: str
+    predicate: str
+    object_kind: str | None = None
+    object_ref: str | None = None
+    value: str | None = None
+    confidence: float = 0.5
+    detail: str | None = None
+
+
+class AssertionPatch(BaseModel):
+    active: bool | None = None
+    muted: bool | None = None
+
+
+class ConflictResolveRequest(BaseModel):
+    resolution: Literal["accept_html", "keep_mine", "repair"]
+    note: str | None = None
+
+
+class NotePatch(BaseModel):
+    body: str | None = None
+    position_tag: Literal["Support", "Object", "Clarify"] | None = None
 
 
 class SyncResponse(BaseModel):
@@ -337,10 +395,14 @@ def create_app(
         return result
 
     @app.get("/api/lineage", response_model=LineageResponse)
-    def get_lineage(tracked: bool = False) -> dict:
+    def get_lineage(
+        tracked: bool = False, include_inactive: bool = False
+    ) -> dict:
         return with_connection(
             lambda connection: repository.lineage(
-                connection, tracked_only=tracked
+                connection,
+                tracked_only=tracked,
+                include_inactive=include_inactive,
             )
         )
 
@@ -427,6 +489,89 @@ def create_app(
                 position_tag=payload.position_tag,
             )
         )
+
+    @app.get("/api/conflicts", response_model=list[ConflictResponse])
+    def get_conflicts(status: str | None = "open") -> list[dict]:
+        return with_connection(
+            lambda connection: repository.list_conflicts(
+                connection, status=status
+            )
+        )
+
+    @app.post(
+        "/api/conflicts/{conflict_id}/resolve", response_model=ConflictResponse
+    )
+    def resolve_conflict(
+        conflict_id: int, payload: ConflictResolveRequest
+    ) -> dict:
+        result = with_connection(
+            lambda connection: repository.resolve_conflict(
+                connection,
+                conflict_id,
+                resolution=payload.resolution,
+                resolution_note=payload.note,
+            )
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="conflict not found")
+        return result
+
+    @app.post(
+        "/api/assertions", response_model=AssertionResponse, status_code=201
+    )
+    def post_assertion(payload: AssertionRequest) -> dict:
+        return with_connection(
+            lambda connection: repository.add_assertion(
+                connection,
+                subject_kind=payload.subject_kind,
+                subject_ref=payload.subject_ref,
+                predicate=payload.predicate,
+                object_kind=payload.object_kind,
+                object_ref=payload.object_ref,
+                value=payload.value,
+                confidence=payload.confidence,
+                detail=payload.detail,
+            )
+        )
+
+    @app.patch(
+        "/api/assertions/{assertion_id}", response_model=AssertionResponse
+    )
+    def patch_assertion(assertion_id: int, payload: AssertionPatch) -> dict:
+        result = with_connection(
+            lambda connection: repository.set_assertion_state(
+                connection,
+                assertion_id,
+                active=payload.active,
+                muted=payload.muted,
+            )
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="assertion not found")
+        return result
+
+    @app.patch("/api/notes/{note_id}", response_model=NoteResponse)
+    def patch_note(note_id: int, payload: NotePatch) -> dict:
+        result = with_connection(
+            lambda connection: repository.update_note(
+                connection,
+                note_id,
+                body=payload.body,
+                position_tag=payload.position_tag,
+            )
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        return result
+
+    @app.delete("/api/notes/{note_id}", status_code=204)
+    def remove_note(note_id: int) -> Response:
+        deleted = with_connection(
+            lambda connection: repository.delete_note(connection, note_id)
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="note not found")
+        return Response(status_code=204)
 
     @app.get("/api/events", include_in_schema=False)
     def get_events() -> Response:

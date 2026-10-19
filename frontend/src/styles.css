@@ -198,3 +198,16 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
   body { overflow: auto; }
   .top-bar { align-items: stretch; }
 }
+
+.conflict-list { list-style: none; margin: 0; padding: 0; }
+.conflict-list li { border-bottom: 1px solid var(--border); padding: 9px 4px; }
+.conflict-heading { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.conflict-heading .created-at { margin-left: auto; color: var(--muted); font-size: 12px; }
+.conflict-assertions { list-style: none; margin: 6px 0; padding: 0; }
+.conflict-assertions li { display: flex; gap: 8px; align-items: baseline; border: 0; padding: 2px 0; }
+.conflict-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.link-form { display: flex; gap: 6px; align-items: end; flex-wrap: wrap; margin-top: 8px; }
+.link-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); }
+.link-form select, .link-form input { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+.predicate-lineage { background: #ffd7d7; color: #7a1f1f; }
+.edge.muted { stroke: #b4b9c2; stroke-dasharray: 3 5; opacity: 0.55; }

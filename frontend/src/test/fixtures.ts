@@ -1,4 +1,6 @@
 import type {
+  Assertion,
+  Conflict,
   DiscoveryItem,
   Lineage,
   Meeting,
@@ -157,11 +159,14 @@ export const detail: TdocDetail = {
   assertions: [
     {
       id: 1,
+      subject_kind: "tdoc",
+      subject_ref: "S3-264202",
       predicate: "decision",
       object_kind: null,
       object_ref: null,
       value: "revised",
       source: "html",
+      source_ref: "agenda",
       confidence: 1,
       verified: true,
       active: true,
@@ -172,11 +177,14 @@ export const detail: TdocDetail = {
     },
     {
       id: 2,
+      subject_kind: "tdoc",
+      subject_ref: "S3-264202",
       predicate: "revision_of",
       object_kind: "tdoc",
       object_ref: "S3-264203",
       value: null,
       source: "html",
+      source_ref: "agenda",
       confidence: 1,
       verified: true,
       active: true,
@@ -234,6 +242,8 @@ export const discovery: DiscoveryItem[] = [
     agenda_item: null,
     confidence: 0.7,
     created_at: "2026-10-16T10:00:00.000000Z",
+    action: "track",
+    assertion_id: null,
   },
   {
     kind: "filename_hint",
@@ -244,6 +254,40 @@ export const discovery: DiscoveryItem[] = [
     agenda_item: null,
     confidence: 0.8,
     created_at: "2026-10-16T10:00:00.000000Z",
+    action: "promote",
+    assertion_id: 7,
+  },
+];
+
+const userAssertion: Assertion = {
+  id: 3,
+  subject_kind: "tdoc",
+  subject_ref: "S3-264202",
+  predicate: "decision",
+  object_kind: null,
+  object_ref: null,
+  value: "agreed",
+  source: "user",
+  source_ref: null,
+  confidence: 0.5,
+  verified: false,
+  active: true,
+  muted: false,
+  superseded_by: null,
+  observed_at: "2026-10-16T13:00:00.000000Z",
+  detail: null,
+};
+
+export const conflicts: Conflict[] = [
+  {
+    id: 1,
+    predicate: "decision",
+    subject_ref: "S3-264202",
+    status: "open",
+    resolution: null,
+    created_at: "2026-10-16T13:00:00.000000Z",
+    resolved_at: null,
+    assertions: [userAssertion, detail.assertions[0]],
   },
 ];
 

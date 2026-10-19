@@ -173,7 +173,7 @@ export function LineageView({ lineage, selected, onSelect }: Props) {
                   key={`${edge.source}-${edge.target}-${edge.kind}`}
                   className={`edge ${edge.kind} ${
                     edge.verified ? "verified" : "unverified"
-                  }`}
+                  } ${edge.active === false || edge.muted ? "muted" : ""}`}
                   d={edgePath(edge, positions)}
                   data-testid={`edge-${edge.source}-${edge.target}`}
                 />

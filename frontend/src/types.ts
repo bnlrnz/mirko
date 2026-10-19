@@ -77,11 +77,14 @@ export interface MailSummary {
 
 export interface Assertion {
   id: number;
+  subject_kind: string;
+  subject_ref: string;
   predicate: string;
   object_kind: string | null;
   object_ref: string | null;
   value: string | null;
   source: string;
+  source_ref: string | null;
   confidence: number;
   verified: boolean;
   active: boolean;
@@ -89,6 +92,19 @@ export interface Assertion {
   superseded_by: number | null;
   observed_at: string;
   detail: unknown;
+}
+
+export type ConflictResolution = "accept_html" | "keep_mine" | "repair";
+
+export interface Conflict {
+  id: number;
+  predicate: string;
+  subject_ref: string;
+  status: string;
+  resolution: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  assertions: Assertion[];
 }
 
 export interface TdocDetail extends TdocSummary {
@@ -130,6 +146,8 @@ export interface LineageEdge {
   confidence: number;
   verified: boolean;
   source_ref: string | null;
+  active?: boolean;
+  muted?: boolean;
 }
 
 export interface Lineage {
@@ -146,6 +164,8 @@ export interface DiscoveryItem {
   agenda_item: string | null;
   confidence: number;
   created_at: string | null;
+  action?: "track" | "promote" | null;
+  assertion_id?: number | null;
 }
 
 export interface SyncStatus {

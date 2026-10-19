@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import {
+  conflicts,
   detail,
   discovery,
   lineage,
@@ -20,29 +21,53 @@ function json(data: unknown): Response {
 }
 
 function installFetch() {
-  const mock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === "/api/meeting") return json(meeting);
-    if (url.startsWith("/api/lineage")) return json(lineage);
-    if (url === "/api/discovery") return json(discovery);
-    if (url === "/api/sync/status") return json(sync);
-    if (url === "/api/sync") return json({ status: "ok" });
-    if (url === "/api/tdocs?state=agreed") return json([tdocs[1]]);
-    if (url === "/api/tdocs") return json(tdocs);
-    if (url === "/api/tdocs/S3-264203") {
-      return json({
-        ...detail,
-        tdoc_number: "S3-264203",
-        title: "Revised CR",
-        decision: "agreed",
-        is_tracked: false,
-      });
-    }
-    if (url === "/api/tdocs/S3-264203/timeline") return json(timeline);
-    if (url === "/api/tdocs/S3-264202") return json(detail);
-    if (url === "/api/tdocs/S3-264202/timeline") return json(timeline);
-    return json({});
-  });
+  const mock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/meeting") return json(meeting);
+      if (url.startsWith("/api/lineage")) return json(lineage);
+      if (url === "/api/discovery") return json(discovery);
+      if (url === "/api/conflicts") return json(conflicts);
+      if (url.endsWith("/resolve")) {
+        return json({ ...conflicts[0], status: "resolved" });
+      }
+      if (url === "/api/assertions") {
+        return json({
+          ...conflicts[0].assertions[0],
+          id: 4,
+          predicate: "revision_of",
+          object_ref: "S3-264999",
+        });
+      }
+      if (url === "/api/notes/1" && method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/tdocs/S3-264202/track") {
+        return json({ tdoc_number: "S3-264202", is_tracked: true });
+      }
+      if (url === "/api/assertions/7") {
+        return json({ ...conflicts[0].assertions[0], id: 7, active: true });
+      }
+      if (url === "/api/sync/status") return json(sync);
+      if (url === "/api/sync") return json({ status: "ok" });
+      if (url === "/api/tdocs?state=agreed") return json([tdocs[1]]);
+      if (url === "/api/tdocs") return json(tdocs);
+      if (url === "/api/tdocs/S3-264203") {
+        return json({
+          ...detail,
+          tdoc_number: "S3-264203",
+          title: "Revised CR",
+          decision: "agreed",
+          is_tracked: false,
+        });
+      }
+      if (url === "/api/tdocs/S3-264203/timeline") return json(timeline);
+      if (url === "/api/tdocs/S3-264202") return json(detail);
+      if (url === "/api/tdocs/S3-264202/timeline") return json(timeline);
+      return json({});
+    },
+  );
   vi.stubGlobal("fetch", mock);
   return mock;
 }
@@ -105,5 +130,55 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Sync Now" })).toBeEnabled();
     });
+  });
+
+  it("lists conflicts and resolves them", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: /Conflicts/ }));
+    const list = await screen.findByLabelText("Open conflicts");
+    expect(within(list).getByText("decision")).toBeInTheDocument();
+
+    fireEvent.click(within(list).getByRole("button", { name: "Keep mine" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Keep mine" }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("adds a manual lineage link from the detail panel", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+
+    fireEvent.change(within(panel).getByLabelText("Link target"), {
+      target: { value: "S3-264999" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Add link" }));
+    await waitFor(() =>
+      expect(within(panel).getByLabelText("Link target")).toHaveValue(""),
+    );
+  });
+
+  it("deletes a note from the detail panel", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    fireEvent.click(within(panel).getByRole("button", { name: "delete" }));
+    await waitFor(() =>
+      expect(within(panel).getByRole("button", { name: "delete" })).toBeInTheDocument(),
+    );
+  });
+
+  it("promotes a discovery hint", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: /Discovery/ }));
+    const list = await screen.findByLabelText("Discovery items");
+    fireEvent.click(within(list).getByRole("button", { name: "Promote" }));
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Promote" })).toBeInTheDocument(),
+    );
   });
 });

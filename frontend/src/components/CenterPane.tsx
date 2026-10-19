@@ -1,8 +1,11 @@
 import type {
+  Conflict,
+  ConflictResolution,
   DiscoveryItem,
   Lineage,
   TimelineEvent,
 } from "../types";
+import { ConflictsView } from "./ConflictsView";
 import { DiscoveryView } from "./DiscoveryView";
 import { LineageView } from "./LineageView";
 import { TimelineView } from "./TimelineView";
@@ -20,9 +23,11 @@ interface Props {
   lineage: Lineage;
   timeline: TimelineEvent[];
   discovery: DiscoveryItem[];
-  conflicts: number;
+  conflicts: Conflict[];
   selected: string | null;
   onSelect: (tdoc: string) => void;
+  onResolve: (id: number, resolution: ConflictResolution) => void;
+  onPromote: (item: DiscoveryItem) => void;
 }
 
 const TABS: { id: CenterTab; label: string }[] = [
@@ -42,6 +47,8 @@ export function CenterPane({
   conflicts,
   selected,
   onSelect,
+  onResolve,
+  onPromote,
 }: Props) {
   return (
     <section className="center-pane">
@@ -56,8 +63,8 @@ export function CenterPane({
             onClick={() => onTab(item.id)}
           >
             {item.label}
-            {item.id === "conflicts" && conflicts > 0 ? (
-              <span className="count">{conflicts}</span>
+            {item.id === "conflicts" && conflicts.length > 0 ? (
+              <span className="count">{conflicts.length}</span>
             ) : null}
             {item.id === "new" ? (
               <span className="count">
@@ -79,22 +86,24 @@ export function CenterPane({
           <TimelineView events={timeline} selected={selected} />
         ) : null}
         {tab === "conflicts" ? (
-          <div className="empty-state">
-            <h3>{conflicts > 0 ? "Open conflicts" : "No open conflicts"}</h3>
-            <p>
-              {conflicts > 0
-                ? "Select a flagged TDoc to review the competing assertions."
-                : "HTML, user, and hint assertions currently agree."}
-            </p>
-          </div>
+          <ConflictsView
+            conflicts={conflicts}
+            onResolve={onResolve}
+            onSelect={onSelect}
+          />
         ) : null}
         {tab === "discovery" ? (
-          <DiscoveryView items={discovery} onSelect={onSelect} />
+          <DiscoveryView
+            items={discovery}
+            onSelect={onSelect}
+            onPromote={onPromote}
+          />
         ) : null}
         {tab === "new" ? (
           <DiscoveryView
             items={discovery.filter((row) => row.kind === "provisional_tdoc")}
             onSelect={onSelect}
+            onPromote={onPromote}
             emptyTitle="No provisional numbers"
             emptyBody="Working drafts whose numbers are not in the official agenda appear here."
           />

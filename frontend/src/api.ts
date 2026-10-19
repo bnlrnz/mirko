@@ -1,8 +1,12 @@
 import type {
+  Assertion,
+  Conflict,
+  ConflictResolution,
   DiscoveryItem,
   Lineage,
   MailSummary,
   Meeting,
+  Note,
   SyncStatus,
   TdocDetail,
   TdocSummary,
@@ -42,13 +46,63 @@ export const api = {
     request<TimelineEvent[]>(
       `/api/tdocs/${encodeURIComponent(tdoc)}/timeline`,
     ),
-  lineage: (trackedOnly: boolean) =>
-    request<Lineage>(`/api/lineage${query({ tracked: trackedOnly })}`),
+  lineage: (trackedOnly: boolean, includeInactive = true) =>
+    request<Lineage>(
+      `/api/lineage${query({
+        tracked: trackedOnly,
+        include_inactive: includeInactive,
+      })}`,
+    ),
   mail: (params: Record<string, string | number | undefined> = {}) =>
     request<MailSummary[]>(
       `/api/mail${query(params as Record<string, string | undefined>)}`,
     ),
   discovery: () => request<DiscoveryItem[]>("/api/discovery"),
+  conflicts: () => request<Conflict[]>("/api/conflicts"),
+  resolveConflict: (id: number, resolution: ConflictResolution, note?: string) =>
+    request<Conflict>(`/api/conflicts/${id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution, note }),
+    }),
+  addAssertion: (body: {
+    subject_ref: string;
+    predicate: string;
+    object_kind?: string | null;
+    object_ref?: string | null;
+    value?: string | null;
+    confidence?: number;
+    detail?: string | null;
+  }) =>
+    request<Assertion>("/api/assertions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateAssertion: (
+    id: number,
+    body: { active?: boolean; muted?: boolean },
+  ) =>
+    request<Assertion>(`/api/assertions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateNote: (
+    id: number,
+    body: { body?: string; position_tag?: string | null },
+  ) =>
+    request<Note>(`/api/notes/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteNote: (id: number) =>
+    fetch(`/api/notes/${id}`, { method: "DELETE" }).then((response) => {
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+    }),
   syncStatus: () => request<SyncStatus>("/api/sync/status"),
   sync: () => request<{ status: string }>("/api/sync", { method: "POST" }),
   track: (tdoc: string, tracked: boolean) =>

@@ -343,8 +343,26 @@ def timeline(connection: sqlite3.Connection, tdoc_number: str) -> list[dict]:
 
 
 def lineage(
-    connection: sqlite3.Connection, *, tracked_only: bool = False
+    connection: sqlite3.Connection,
+    *,
+    tracked_only: bool = False,
+    include_inactive: bool = False,
 ) -> dict:
+    if include_inactive:
+        edge_sql = (
+            "SELECT subject_ref AS source, object_ref AS target, "
+            "predicate AS kind, source, source_ref, confidence, verified, "
+            "active, muted FROM assertion "
+            "WHERE subject_kind = 'tdoc' AND object_kind = 'tdoc' "
+            "AND predicate IN ('revision_of', 'merged_into', 'based_on') "
+            "ORDER BY target, source, kind"
+        )
+    else:
+        edge_sql = (
+            "SELECT source, target, kind, source, source_ref, confidence, "
+            "verified, 1 AS active, 0 AS muted FROM edge_current "
+            "ORDER BY target, source, kind"
+        )
     tracked = {
         row["tdoc_number"]
         for row in connection.execute(
@@ -354,10 +372,7 @@ def lineage(
     if tracked_only and tracked:
         edges = [
             dict(row)
-            for row in connection.execute(
-                "SELECT source, target, kind, confidence, verified, source_ref "
-                "FROM edge_current ORDER BY target, source, kind"
-            )
+            for row in connection.execute(edge_sql)
             if row["source"] in tracked or row["target"] in tracked
         ]
         node_ids = set(tracked)
@@ -365,13 +380,7 @@ def lineage(
             node_ids.add(edge["source"])
             node_ids.add(edge["target"])
     else:
-        edges = [
-            dict(row)
-            for row in connection.execute(
-                "SELECT source, target, kind, confidence, verified, source_ref "
-                "FROM edge_current ORDER BY target, source, kind"
-            )
-        ]
+        edges = [dict(row) for row in connection.execute(edge_sql)]
         node_ids = {
             row["tdoc_number"]
             for row in connection.execute("SELECT tdoc_number FROM tdoc")
@@ -456,6 +465,8 @@ def discovery(connection: sqlite3.Connection) -> list[dict]:
                 "agenda_item": None,
                 "confidence": 0.7,
                 "created_at": number.first_seen_at,
+                "action": "track",
+                "assertion_id": None,
             }
         )
 
@@ -473,6 +484,8 @@ def discovery(connection: sqlite3.Connection) -> list[dict]:
                 "agenda_item": None,
                 "confidence": hint["confidence"],
                 "created_at": hint["observed_at"],
+                "action": "promote",
+                "assertion_id": int(hint["id"]),
             }
         )
 
@@ -491,6 +504,8 @@ def discovery(connection: sqlite3.Connection) -> list[dict]:
                 "agenda_item": mail["agenda_item"],
                 "confidence": 0.4,
                 "created_at": mail["date_utc"] or mail["ingested_at"],
+                "action": None,
+                "assertion_id": None,
             }
         )
     items.sort(key=lambda item: item["created_at"] or "", reverse=True)
@@ -642,3 +657,363 @@ def add_note(
         (cursor.lastrowid,),
     ).fetchone()
     return _note_row(row)
+
+
+def _assertion_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "subject_kind": row["subject_kind"],
+        "subject_ref": row["subject_ref"],
+        "predicate": row["predicate"],
+        "object_kind": row["object_kind"],
+        "object_ref": row["object_ref"],
+        "value": row["value"],
+        "source": row["source"],
+        "source_ref": row["source_ref"],
+        "confidence": row["confidence"],
+        "verified": bool(row["verified"]),
+        "active": bool(row["active"]),
+        "muted": bool(row["muted"]),
+        "superseded_by": row["superseded_by"],
+        "observed_at": row["observed_at"],
+        "detail": _json(row["detail"]),
+    }
+
+
+def _conflict_row(row: sqlite3.Row, assertions: list[dict]) -> dict:
+    return {
+        "id": row["id"],
+        "predicate": row["predicate"],
+        "subject_ref": row["subject_ref"],
+        "status": row["status"],
+        "resolution": row["resolution"],
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"],
+        "assertions": assertions,
+    }
+
+
+def list_assertions(
+    connection: sqlite3.Connection,
+    *,
+    subject_ref: str | None = None,
+    predicate: str | None = None,
+    active_only: bool = False,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if subject_ref is not None:
+        clauses.append("subject_ref = ?")
+        params.append(subject_ref)
+    if predicate is not None:
+        clauses.append("predicate = ?")
+        params.append(predicate)
+    if active_only:
+        clauses.append("active = 1 AND muted = 0")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = connection.execute(
+        "SELECT * FROM assertion "
+        f"{where} ORDER BY observed_at, id",
+        params,
+    ).fetchall()
+    return [_assertion_row(row) for row in rows]
+
+
+def add_assertion(
+    connection: sqlite3.Connection,
+    *,
+    subject_kind: str,
+    subject_ref: str,
+    predicate: str,
+    object_kind: str | None = None,
+    object_ref: str | None = None,
+    value: str | None = None,
+    confidence: float = 0.5,
+    detail: str | None = None,
+    source: str = "user",
+) -> dict:
+    observed_at = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    cursor = connection.execute(
+        "INSERT INTO assertion("
+        "subject_kind, subject_ref, predicate, object_kind, object_ref, value, "
+        "source, confidence, verified, active, muted, observed_at, detail"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, ?, ?)",
+        (
+            subject_kind,
+            subject_ref,
+            predicate,
+            object_kind,
+            object_ref,
+            value,
+            source,
+            confidence,
+            observed_at,
+            detail,
+        ),
+    )
+    assertion_id = int(cursor.lastrowid)
+    _reconcile_manual_assertion(
+        connection,
+        assertion_id,
+        subject_ref=subject_ref,
+        predicate=predicate,
+        object_ref=object_ref,
+        value=value,
+        observed_at=observed_at,
+    )
+    connection.commit()
+    row = connection.execute(
+        "SELECT * FROM assertion WHERE id = ?", (assertion_id,)
+    ).fetchone()
+    return _assertion_row(row)
+
+
+def _reconcile_manual_assertion(
+    connection: sqlite3.Connection,
+    assertion_id: int,
+    *,
+    subject_ref: str,
+    predicate: str,
+    object_ref: str | None,
+    value: str | None,
+    observed_at: str,
+) -> None:
+    rows = connection.execute(
+        "SELECT id, object_ref, value FROM assertion "
+        "WHERE source = 'html' AND subject_kind = 'tdoc' "
+        "AND subject_ref = ? AND predicate = ? AND active = 1 AND muted = 0",
+        (subject_ref, predicate),
+    ).fetchall()
+    conflicts = [
+        int(row["id"])
+        for row in rows
+        if row["object_ref"] != object_ref or row["value"] != value
+    ]
+    agrees = [row for row in rows if int(row["id"]) not in conflicts]
+    if agrees:
+        connection.execute(
+            "UPDATE assertion SET verified = 1 WHERE id = ?", (assertion_id,)
+        )
+    if conflicts:
+        connection.execute(
+            "INSERT INTO conflict("
+            "predicate, subject_ref, assertion_ids, status, created_at"
+            ") VALUES (?, ?, ?, 'open', ?)",
+            (
+                predicate,
+                subject_ref,
+                json.dumps([assertion_id, *conflicts]),
+                observed_at,
+            ),
+        )
+
+
+def set_assertion_state(
+    connection: sqlite3.Connection,
+    assertion_id: int,
+    *,
+    active: bool | None = None,
+    muted: bool | None = None,
+) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM assertion WHERE id = ?", (assertion_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    sets: list[str] = []
+    params: list[Any] = []
+    if active is not None:
+        sets.append("active = ?")
+        params.append(1 if active else 0)
+    if muted is not None:
+        sets.append("muted = ?")
+        params.append(1 if muted else 0)
+    if sets:
+        params.append(assertion_id)
+        connection.execute(
+            f"UPDATE assertion SET {', '.join(sets)} WHERE id = ?", params
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM assertion WHERE id = ?", (assertion_id,)
+        ).fetchone()
+    return _assertion_row(row)
+
+
+def _assertion_ids(raw: str | None) -> list[int]:
+    try:
+        return [int(value) for value in json.loads(raw or "[]")]
+    except (ValueError, TypeError):
+        return []
+
+
+def list_conflicts(
+    connection: sqlite3.Connection, *, status: str | None = "open"
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = connection.execute(
+        "SELECT * FROM conflict "
+        f"{where} ORDER BY created_at, id",
+        params,
+    ).fetchall()
+    return [_conflict_with_assertions(connection, row) for row in rows]
+
+
+def _conflict_with_assertions(
+    connection: sqlite3.Connection, row: sqlite3.Row
+) -> dict:
+    assertion_ids = _assertion_ids(row["assertion_ids"])
+    assertions: list[dict] = []
+    if assertion_ids:
+        placeholders = ", ".join("?" for _ in assertion_ids)
+        assertion_rows = connection.execute(
+            f"SELECT * FROM assertion WHERE id IN ({placeholders})",
+            assertion_ids,
+        ).fetchall()
+        assertions = [_assertion_row(item) for item in assertion_rows]
+    return _conflict_row(row, assertions)
+
+
+def get_conflict(connection: sqlite3.Connection, conflict_id: int) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM conflict WHERE id = ?", (conflict_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return _conflict_with_assertions(connection, row)
+
+
+def resolve_conflict(
+    connection: sqlite3.Connection,
+    conflict_id: int,
+    *,
+    resolution: str,
+    resolution_note: str | None = None,
+) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM conflict WHERE id = ?", (conflict_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] != "open":
+        return None
+    try:
+        assertion_ids = [int(value) for value in json.loads(row["assertion_ids"] or "[]")]
+    except (ValueError, TypeError):
+        assertion_ids = []
+    rows = []
+    if assertion_ids:
+        placeholders = ", ".join("?" for _ in assertion_ids)
+        rows = connection.execute(
+            f"SELECT * FROM assertion WHERE id IN ({placeholders})",
+            assertion_ids,
+        ).fetchall()
+
+    verified_html = [r["id"] for r in rows if r["source"] == "html"]
+    user_rows = [r["id"] for r in rows if r["source"] == "user"]
+
+    if resolution == "accept_html":
+        losers = user_rows
+        winners = verified_html
+    elif resolution == "keep_mine":
+        losers = verified_html
+        winners = user_rows
+    elif resolution == "repair":
+        losers = verified_html
+        winners = user_rows
+    else:
+        raise ValueError(f"unknown resolution: {resolution}")
+
+    for assertion_id in losers:
+        connection.execute(
+            "UPDATE assertion SET active = 0, muted = 1 WHERE id = ?",
+            (assertion_id,),
+        )
+    for assertion_id in winners:
+        connection.execute(
+            "UPDATE assertion SET active = 1, muted = 0, verified = 1 "
+            "WHERE id = ?",
+            (assertion_id,),
+        )
+    resolved_at = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    connection.execute(
+        "UPDATE conflict SET status = 'resolved', resolution = ?, "
+        "resolved_at = ? WHERE id = ?",
+        (resolution_note or resolution, resolved_at, conflict_id),
+    )
+    connection.commit()
+    return get_conflict(connection, conflict_id)
+
+
+def list_notes(
+    connection: sqlite3.Connection,
+    *,
+    target_kind: str | None = None,
+    target_ref: str | None = None,
+) -> list[dict]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if target_kind is not None:
+        clauses.append("target_kind = ?")
+        params.append(target_kind)
+    if target_ref is not None:
+        clauses.append("target_ref = ?")
+        params.append(target_ref)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = connection.execute(
+        "SELECT * FROM note "
+        f"{where} ORDER BY created_at, id",
+        params,
+    ).fetchall()
+    return [_note_row(row) for row in rows]
+
+
+def update_note(
+    connection: sqlite3.Connection,
+    note_id: int,
+    *,
+    body: str | None = None,
+    position_tag: str | None = None,
+) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM note WHERE id = ?", (note_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    sets: list[str] = []
+    params: list[Any] = []
+    if body is not None:
+        sets.append("body = ?")
+        params.append(body)
+    if position_tag is not None:
+        sets.append("position_tag = ?")
+        params.append(position_tag)
+    if sets:
+        sets.append("updated_at = ?")
+        params.append(
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        )
+        params.append(note_id)
+        connection.execute(
+            f"UPDATE note SET {', '.join(sets)} WHERE id = ?", params
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM note WHERE id = ?", (note_id,)
+        ).fetchone()
+    return _note_row(row)
+
+
+def delete_note(connection: sqlite3.Connection, note_id: int) -> bool:
+    cursor = connection.execute("DELETE FROM note WHERE id = ?", (note_id,))
+    connection.commit()
+    return cursor.rowcount > 0

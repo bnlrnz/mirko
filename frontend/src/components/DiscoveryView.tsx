@@ -3,6 +3,7 @@ import type { DiscoveryItem } from "../types";
 interface Props {
   items: DiscoveryItem[];
   onSelect: (tdoc: string) => void;
+  onPromote?: (item: DiscoveryItem) => void;
   emptyTitle?: string;
   emptyBody?: string;
 }
@@ -10,6 +11,7 @@ interface Props {
 export function DiscoveryView({
   items,
   onSelect,
+  onPromote,
   emptyTitle = "Nothing to review",
   emptyBody = "Discovery collects provisional numbers, filename hints, and agenda-only mail.",
 }: Props) {
@@ -47,6 +49,15 @@ export function DiscoveryView({
                 {tdoc}
               </button>
             ))}
+            {item.action && onPromote ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => onPromote(item)}
+              >
+                {item.action === "track" ? "Track" : "Promote"}
+              </button>
+            ) : null}
           </div>
         </li>
       ))}

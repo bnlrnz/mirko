@@ -1,12 +1,16 @@
 import { useState } from "react";
 
-import type { TdocDetail } from "../types";
+import type { Conflict, ConflictResolution, TdocDetail } from "../types";
 
 interface Props {
   detail: TdocDetail | null;
   includeEphemeral: boolean;
+  conflicts: Conflict[];
   onTrack: (tdoc: string, tracked: boolean) => void;
   onAddNote: (body: string, position: string) => void;
+  onDeleteNote: (id: number) => void;
+  onAddAssertion: (subject: string, predicate: string, object: string) => void;
+  onResolveConflict: (id: number, resolution: ConflictResolution) => void;
   onSelect: (tdoc: string) => void;
 }
 
@@ -20,12 +24,18 @@ function value(value: string | number | boolean | null | undefined): string {
 export function DetailPanel({
   detail,
   includeEphemeral,
+  conflicts,
   onTrack,
   onAddNote,
+  onDeleteNote,
+  onAddAssertion,
+  onResolveConflict,
   onSelect,
 }: Props) {
   const [note, setNote] = useState("");
   const [position, setPosition] = useState("");
+  const [predicate, setPredicate] = useState("revision_of");
+  const [linkTarget, setLinkTarget] = useState("");
 
   if (!detail) {
     return (
@@ -146,6 +156,13 @@ export function DetailPanel({
                 ) : null}
                 <p className="note-body">{item.body}</p>
                 <small>{item.author ?? item.source} · {item.created_at}</small>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => onDeleteNote(item.id)}
+                >
+                  delete
+                </button>
               </li>
             ))}
           </ul>
@@ -183,6 +200,45 @@ export function DetailPanel({
         </form>
       </section>
 
+      {conflicts.length > 0 ? (
+        <section>
+          <h3>Conflicts <span className="count">{conflicts.length}</span></h3>
+          <ul className="conflict-list" aria-label="TDoc conflicts">
+            {conflicts.map((conflict) => (
+              <li key={conflict.id}>
+                <div className="conflict-heading">
+                  <span className={`badge predicate-${conflict.predicate}`}>
+                    {conflict.predicate}
+                  </span>
+                </div>
+                <div className="conflict-actions">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onResolveConflict(conflict.id, "accept_html")
+                    }
+                  >
+                    Accept HTML
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onResolveConflict(conflict.id, "keep_mine")}
+                  >
+                    Keep mine
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onResolveConflict(conflict.id, "repair")}
+                  >
+                    Repair
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section>
         <h3>Assertions <span className="count">{detail.assertions.length}</span></h3>
         <ul className="assertion-list">
@@ -209,6 +265,38 @@ export function DetailPanel({
             </li>
           ))}
         </ul>
+        <form
+          className="link-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const target = linkTarget.trim().toUpperCase();
+            if (!target) {
+              return;
+            }
+            onAddAssertion(detail.tdoc_number, predicate, target);
+            setLinkTarget("");
+          }}
+        >
+          <label>
+            Link
+            <select
+              aria-label="Link predicate"
+              value={predicate}
+              onChange={(event) => setPredicate(event.target.value)}
+            >
+              <option value="revision_of">revision of</option>
+              <option value="merged_into">merged into</option>
+              <option value="based_on">based on</option>
+            </select>
+          </label>
+          <input
+            aria-label="Link target"
+            placeholder="S3-264999"
+            value={linkTarget}
+            onChange={(event) => setLinkTarget(event.target.value)}
+          />
+          <button type="submit">Add link</button>
+        </form>
       </section>
     </aside>
   );
