@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from typing import Callable
 
 from mirko.ingest.filename import FilenameInfo, parse_filename
+from mirko.ingest.tdoc_projection import ensure_tdoc
 from mirko.meeting_folder import MeetingFolder
 
 ARTIFACT_KINDS = ("working_draft", "inbox_document")
@@ -104,9 +105,10 @@ class FilenameIngestor:
                     unfiled.append(logical_path)
                     continue
 
-                created = self._ensure_tdoc(
+                created = ensure_tdoc(
                     connection,
                     info.primary_tdoc,
+                    source="filename",
                     observed_at=observed_at,
                 )
                 if created:
@@ -160,32 +162,6 @@ class FilenameIngestor:
             "UPDATE artifact SET raw_meta = ? WHERE id = ?",
             (json.dumps(metadata, ensure_ascii=False), artifact_id),
         )
-
-    def _ensure_tdoc(
-        self,
-        connection: sqlite3.Connection,
-        tdoc_number: str,
-        *,
-        observed_at: str,
-    ) -> bool:
-        existing = connection.execute(
-            "SELECT 1 FROM tdoc WHERE tdoc_number = ?", (tdoc_number,)
-        ).fetchone()
-        if existing is not None:
-            return False
-        connection.execute(
-            "INSERT INTO tdoc("
-            "tdoc_number, state_source, first_seen_at, last_seen_at, "
-            "is_tracked, is_provisional, raw_meta"
-            ") VALUES (?, 'filename', ?, ?, 0, 1, ?)",
-            (
-                tdoc_number,
-                observed_at,
-                observed_at,
-                json.dumps({"discovered_by": "filename"}, ensure_ascii=False),
-            ),
-        )
-        return True
 
     def _insert_hint(
         self,
