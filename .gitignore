@@ -20,3 +20,8 @@ downloads/
 .vscode/
 .idea/
 .DS_Store
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+.hypothesis/

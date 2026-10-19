@@ -21,6 +21,7 @@
             python314Packages.hypothesis
             python314Packages.httpx
             lftp
+            nodejs_22
           ];
         };
       });
