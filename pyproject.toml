@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mirko"
+version = "0.1.0"
+description = "Local-first 3GPP SA3 contribution tracker"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["mirko*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
