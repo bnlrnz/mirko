@@ -83,7 +83,7 @@ asyncio task), one SQLite connection per request/task, WAL mode.
         ┌───────▼────────┐        ┌───────▼─────────┐        ┌────────▼────────┐
         │ One FTP endpoint│        │ mbox / EML dir  │        │ xdg-open (no    │
         │ (local/remote/  │        │ (Thunderbird)   │        │ shell)          │
-        │  public https)  │        └─────────────────┘        └─────────────────┘
+        │  public ftp)    │        └─────────────────┘        └─────────────────┘
         └─────────────────┘
                 │
         ┌───────▼──────────────────────────────┐
@@ -178,11 +178,17 @@ Rules:
 
 Known endpoint presets (documentation only; still one active at a time):
 
-| Kind | Host | Auth | Notes |
+| Kind | FTP URL | Auth | Notes |
 |---|---|---|---|
-| `local` | `10.10.10.10` | anonymous | Default during meeting. Full view. |
-| `remote` | short-lived e.g. `o2arena_prague.3gpp.org` | meeting credentials via env | Lagging mirror; chosen manually. |
+| `local` | `ftp://10.10.10.10/` + `base_path` | anonymous | Default during meeting. Full view. |
+| `remote` | short-lived e.g. `ftp://o2arena_prague.3gpp.org/` | meeting credentials via env | Lagging mirror; chosen manually. |
 | `public` | `ftp://ftp.3gpp.org/Meetings_3GPP_SYNC/SA3/` | anonymous | Can see `Drafts/`; lags. |
+
+`base_path` is relative to the FTP root, *not* to the HTTP browsing UI. The local
+server also exposes an HTTP view at `http://10.10.10.10/ftp/`, and the public server
+at an equivalent `https://ftp.3gpp.org/...` page, but the sync worker always talks
+plain FTP and drops any `/ftp` URL segment, e.g. `ftp://10.10.10.10/` +
+`/Meetings_3GPP_SYNC/SA3`.
 
 ---
 
