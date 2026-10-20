@@ -318,6 +318,15 @@ class Syncer:
             return "agenda_html", False
         if fnmatch.fnmatchcase(logical_path, config.paths.excel):
             return "allocation_excel", False
+        if (
+            "/" not in logical_path
+            and logical_path.casefold().endswith((".xlsx", ".xls"))
+            and not logical_path.startswith("~$")
+        ):
+            # The published workbook name varies by meeting
+            # (e.g. ``TDoc_List_Meeting_SA3#130.xlsx``), so treat any
+            # root-level spreadsheet as the allocation source.
+            return "allocation_excel", False
         inbox = normalize_remote_path(config.paths.inbox)
         if directory == inbox or directory.startswith(f"{inbox}/"):
             return "inbox_document", False

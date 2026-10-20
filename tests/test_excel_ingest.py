@@ -264,3 +264,79 @@ def test_sync_worker_ingests_excel_before_agenda(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert tdocs == {"S3-264202"}
+
+
+REAL_HEADER = [
+    "TDoc",
+    "Title",
+    "Source",
+    "Type",
+    "For",
+    "Agenda item",
+    "Agenda item description",
+    "TDoc Status",
+    "Is revision of",
+    "Revised to",
+]
+
+
+def test_parse_real_workbook_schema() -> None:
+    data = workbook_bytes(
+        [
+            [
+                "S3-264055",
+                "A#3 - KI#3.1 update",
+                "Example Company",
+                "pCR",
+                "Approval",
+                "5.3.1.3.1",
+                "Solutions (new/updates)",
+                "withdrawn",
+                "S3-263998",
+                "S3-264056",
+            ]
+        ],
+        header=REAL_HEADER,
+    )
+
+    result = parse_allocation_excel(data)
+
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.tdoc == "S3-264055"
+    assert row.agenda_item == "5.3.1.3.1"
+    assert row.topic == "Solutions (new/updates)"
+    assert row.decision == "withdrawn"
+    assert row.withdrawn is True
+    assert row.replaces == "S3-263998"
+    assert row.replaced_by == "S3-264056"
+    assert {edge.kind for edge in result.edges} == {"revision_of", "based_on"}
+
+
+def test_parse_prefers_tdoc_worksheet() -> None:
+    book = Workbook()
+    parameters = book.active
+    parameters.title = "Parameters"
+    parameters.append(["Types of Tdocs"])
+    sheet = book.create_sheet("TDoc_List")
+    sheet.append(REAL_HEADER)
+    sheet.append(
+        [
+            "S3-264055",
+            "A#3 - KI#3.1 update",
+            "Example Company",
+            "pCR",
+            "Approval",
+            "5.3.1.3.1",
+            "Solutions (new/updates)",
+            "noted",
+            "",
+            "",
+        ]
+    )
+    buffer = io.BytesIO()
+    book.save(buffer)
+
+    result = parse_allocation_excel(buffer.getvalue())
+
+    assert [row.tdoc for row in result.rows] == ["S3-264055"]

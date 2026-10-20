@@ -26,6 +26,8 @@ from mirko.ingest.agenda_html import (
 )
 
 MAX_HEADER_SEARCH_ROWS = 40
+MAX_CONSECUTIVE_BLANKS = 100
+MAX_WORKBOOK_ROWS = 50_000
 
 
 def _header_key(value: object) -> str | None:
@@ -47,7 +49,15 @@ _CANONICAL_ALIASES: dict[str, set[str]] = {
         "agenda_point",
         "ai",
     },
-    "topic": {"topic", "subject", "agenda_topic", "topic_title"},
+    "topic": {
+        "topic",
+        "subject",
+        "agenda_topic",
+        "topic_title",
+        "agenda_item_description",
+        "agenda_description",
+        "section",
+    },
     "tdoc": {
         "tdoc",
         "tdoc_number",
@@ -82,16 +92,34 @@ _CANONICAL_ALIASES: dict[str, set[str]] = {
         "for_action_information",
     },
     "avail": {"avail", "available", "availability", "avail_"},
-    "treated": {"treated", "status", "handled", "treated_"},
-    "decision": {"decision", "outcome", "result", "conclusion"},
+    "treated": {"treated", "handled", "treated_status"},
+    "decision": {
+        "decision",
+        "outcome",
+        "result",
+        "conclusion",
+        "tdoc_status",
+        "status",
+    },
     "wdrn": {"wdrn", "withdrawn", "wdrawn"},
     "replaced_by": {
         "replaced_by",
         "replacedby",
         "superseded_by",
         "superseded",
+        "revised_to",
+        "revision_to",
+        "succeeded_by",
     },
-    "replaces": {"replaces", "replaces_", "baseline", "replaces_baseline"},
+    "replaces": {
+        "replaces",
+        "replaces_",
+        "baseline",
+        "replaces_baseline",
+        "is_revision_of",
+        "revision_of",
+        "revised_from",
+    },
 }
 
 _ALIAS_LOOKUP: dict[str, str] = {
@@ -126,6 +154,31 @@ def _is_blank(values: list[object]) -> bool:
     return all(_cell_text(value) == "" for value in values)
 
 
+def _read_rows(sheet: object) -> list[list[object]]:
+    """Read the used rows, ignoring the workbook's giant formatting tail.
+
+    3GPP workbooks often report ``max_row`` near the Excel limit even though
+    only a few hundred rows contain data. Stop once a long run of blank rows
+    follows the data (and enforce a hard cap as a safety net).
+    """
+    rows: list[list[object]] = []
+    blanks = 0
+    seen_data = False
+    for row in sheet.iter_rows(values_only=True):  # type: ignore[attr-defined]
+        values = _row_values(row)
+        rows.append(values)
+        if len(rows) >= MAX_WORKBOOK_ROWS:
+            break
+        if _is_blank(values):
+            blanks += 1
+            if seen_data and blanks >= MAX_CONSECUTIVE_BLANKS:
+                break
+        else:
+            seen_data = True
+            blanks = 0
+    return rows
+
+
 def _detect_header(
     rows: list[list[object]],
 ) -> tuple[int, list[str | None]] | None:
@@ -151,10 +204,19 @@ def parse_allocation_excel(data: bytes) -> AgendaParseResult:
         io.BytesIO(data), read_only=True, data_only=True
     )
     try:
-        sheet = workbook.active
+        sheet = next(
+            (
+                candidate
+                for candidate in workbook.worksheets
+                if "tdoc" in candidate.title.casefold()
+            ),
+            None,
+        )
+        if sheet is None:
+            sheet = workbook.active
         if sheet is None:  # pragma: no cover - defensive
-            raise ValueError("workbook has no active worksheet")
-        raw_rows = [_row_values(row) for row in sheet.iter_rows(values_only=True)]
+            raise ValueError("workbook has no worksheet")
+        raw_rows = _read_rows(sheet)
     finally:
         workbook.close()
 
@@ -177,6 +239,9 @@ def parse_allocation_excel(data: bytes) -> AgendaParseResult:
             mapped[key] = _Cell(tag="td", text=_cell_text(value))
         if "tdoc" not in mapped or not _cell_text(mapped["tdoc"].text):
             continue
+        status = mapped.get("decision")
+        if status is not None and status.text.strip().casefold() == "withdrawn":
+            mapped["wdrn"] = _Cell(tag="td", text="Yes")
         mapped_rows.append(mapped)
 
     rows, issues = interpret_rows(mapped_rows)

@@ -302,3 +302,25 @@ def test_explicit_paths_are_supported(tmp_path: Path) -> None:
     assert client.list_calls == ["Inbox/Drafts"]
     assert report.fetched == 1
     assert report.paths[0].path == "Inbox/Drafts"
+
+
+def test_root_spreadsheet_is_classified_as_allocation(tmp_path: Path) -> None:
+    folder = make_folder(tmp_path)
+    client = FakeFtpClient(
+        {"TDoc_List_Meeting_SA3#130.xlsx": b"excel"}
+    )
+
+    Syncer(folder, client, clock=lambda: NOW).sync()
+
+    artifact = artifact_by_path(folder, "TDoc_List_Meeting_SA3#130.xlsx")
+    assert artifact["kind"] == "allocation_excel"
+
+
+def test_excel_lock_file_is_not_classified_as_allocation(tmp_path: Path) -> None:
+    folder = make_folder(tmp_path)
+    client = FakeFtpClient({"~$TDoc_List_Meeting_SA3#130.xlsx": b"lock"})
+
+    Syncer(folder, client, clock=lambda: NOW).sync()
+
+    artifact = artifact_by_path(folder, "~$TDoc_List_Meeting_SA3#130.xlsx")
+    assert artifact["kind"] == "remote_file"

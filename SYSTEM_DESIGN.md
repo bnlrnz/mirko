@@ -383,9 +383,16 @@ Real-data quirks that the parser must tolerate (all observed):
 
 - Read with `openpyxl` (`read_only=True`, `data_only=True`); never execute macros.
 - Detect the header row by matching the HTML column names; map via an alias table.
+  The published `TDoc_List_Meeting_*.xlsx` uses `Agenda item`,
+  `Agenda item description`, `TDoc Status`, `Is revision of` and `Revised to`
+  for agenda, topic, decision, replaces and replaced-by respectively.
+- If a root-level `.xlsx`/`.xls` does not match `paths.excel`, it is still
+  classified as the allocation workbook (the published name varies by meeting).
 - Same logical schema; `source=excel`, `verified=false`, lower precedence than HTML.
 - Excel only fills gaps; it never overwrites a non-empty HTML value.
 - Store the raw sheet as an artifact blob for audit.
+- Stop reading after a long run of blank rows: the real workbooks report
+  `max_row` near the Excel limit despite only ~900 rows of data.
 
 ### 7.5 Filename parsing (`Drafts/`, `Inbox/`)
 
@@ -820,7 +827,8 @@ AI is deferred, but the seams are kept:
 5. **Ambiguous merge baseline** (missing `Replaces`) becomes a conflict, never a guess.
 6. **`Decision=open` is absent in the real file**; empty is mapped to `open` with
    `state_source=inferred`.
-7. **Excel schema unknown**; the alias table must be validated against the real file.
+7. **Excel schema drifts between meetings**; the alias table is validated against
+   `TDoc_List_Meeting_SA3#130.xlsx` and remains tolerant of new columns.
 8. **Filename false positives** are inevitable; hints are ghost edges and always
    user-confirmable.
 9. **`.lnk` / `.zip` in `Drafts/`** need explicit non-auto-open handling.
