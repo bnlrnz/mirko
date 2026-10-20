@@ -6,6 +6,7 @@ import type { LineageNode } from "./types";
 import {
   conflicts,
   detail,
+  draft,
   lineage,
   meeting,
   notifications,
@@ -36,6 +37,9 @@ function installFetch() {
           ...settings,
           source: { ...settings.source, host: body.host },
           lazy_drafts: body.lazy_drafts,
+          auto_sync: body.auto_sync,
+          meeting_interval_s: body.meeting_interval_s,
+          idle_interval_s: body.idle_interval_s,
         });
       }
       if (url.startsWith("/api/import/excel")) {
@@ -94,6 +98,7 @@ function installFetch() {
       }
       if (url === "/api/tdocs?state=agreed") return json([tdocs[1]]);
       if (url === "/api/tdocs") return json(tdocs);
+      if (url === "/api/drafts/1") return json(draft);
       if (url === "/api/tdocs/S3-264203") {
         return json({
           ...detail,
@@ -250,6 +255,57 @@ describe("App", () => {
     });
   });
 
+  it("highlights and notifies when a new artifact arrives", async () => {
+    const sent = vi.fn();
+    class FakeNotification {
+      static permission: NotificationPermission = "granted";
+      static requestPermission = vi.fn(async () => "granted" as const);
+      onclick: (() => void) | null = null;
+      close = vi.fn();
+      constructor(title: string, options?: NotificationOptions) {
+        sent(title, options);
+      }
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+
+    render(<App />);
+    expect(await screen.findByText("SA3#130 Prague")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.map((call) => String(call[0])),
+      ).toContain("/api/notifications"),
+    );
+
+    const original = fetchMock.getMockImplementation();
+    const arriving = {
+      ...notifications[1],
+      ref: "Inbox/Drafts/draft S3-264202-r3.docx",
+      detail: "draft S3-264202-r3.docx · FTP 2026-10-16T13:30:00",
+      created_at: "2026-10-16T13:30:00.000000Z",
+    };
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/notifications") {
+        return json([arriving, ...notifications]);
+      }
+      return original ? original(input, init) : json({});
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
+    await waitFor(() => {
+      expect(sent).toHaveBeenCalledWith(
+        "New file for S3-264202",
+        expect.objectContaining({
+          body: "draft S3-264202-r3.docx · FTP 2026-10-16T13:30:00",
+        }),
+      );
+    });
+    expect(
+      await screen.findByRole("button", {
+        name: /S3-264202 Original CR revised tracked new file/,
+      }),
+    ).toHaveClass("new-file");
+  });
+
   it("finalizes and links the latest export", async () => {
     render(<App />);
     const button = await screen.findByRole("button", { name: "Finalize" });
@@ -330,9 +386,9 @@ describe("App", () => {
     );
   });
 
-  it("opens the parent TDoc and highlights a clicked draft link", async () => {
+  it("opens a draft detail with its own notes", async () => {
     const original = fetchMock.getMockImplementation();
-    const draft: LineageNode = {
+    const draftNode: LineageNode = {
       ...lineage.nodes[0],
       tdoc_number: "draft:1",
       title: "draft S3-264202-r1.docx",
@@ -346,7 +402,7 @@ describe("App", () => {
       if (String(input).startsWith("/api/lineage")) {
         return json({
           ...lineage,
-          nodes: [...lineage.nodes, draft],
+          nodes: [...lineage.nodes, draftNode],
           edges: [
             ...lineage.edges,
             {
@@ -369,12 +425,31 @@ describe("App", () => {
         name: /draft draft S3-264202-r1.docx for S3-264202 present/,
       }),
     );
-    const panel = await screen.findByLabelText("Detail for S3-264202");
+    const panel = await screen.findByLabelText(
+      "Detail for draft draft S3-264202-r1.docx",
+    );
     expect(
-      await within(panel).findByRole("link", {
-        name: "draft S3-264202-r1.docx",
-      }),
-    ).toHaveClass("artifact-highlight");
+      within(panel).getByRole("link", { name: "draft S3-264202-r1.docx" }),
+    ).toHaveAttribute(
+      "href",
+      "https://10.10.10.10/ftp/Meetings_3GPP_SYNC/SA3/Inbox/Drafts/draft%20S3-264202-r1.docx",
+    );
+    fireEvent.change(within(panel).getByLabelText("New note"), {
+      target: { value: "Draft needs a title fix." },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Add note" }));
+    await waitFor(() => {
+      const noteCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === "/api/notes" &&
+          call[1]?.method === "POST",
+      );
+      expect(JSON.parse(String(noteCall?.[1]?.body))).toMatchObject({
+        target_kind: "draft",
+        target_ref: "1",
+        body: "Draft needs a title fix.",
+      });
+    });
   });
 
   it("fetches deferred artifacts when a TDoc is opened", async () => {
@@ -415,12 +490,28 @@ describe("App", () => {
     fireEvent.click(
       within(dialog).getByLabelText(/Fetch working drafts only/),
     );
+    fireEvent.click(
+      within(dialog).getByLabelText(/Check for FTP updates automatically/),
+    );
+    fireEvent.change(within(dialog).getByLabelText("Meeting update interval"), {
+      target: { value: "30" },
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save settings" }));
 
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Meeting settings" }),
       ).not.toBeInTheDocument();
+    });
+    const saveCall = fetchMock.mock.calls.find(
+      (call) =>
+        String(call[0]) === "/api/settings" && call[1]?.method === "PUT",
+    );
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({
+      auto_sync: false,
+      meeting_interval_s: 30,
+      idle_interval_s: 600,
+      lazy_drafts: false,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));

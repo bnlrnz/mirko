@@ -28,9 +28,13 @@ interface Props {
   log: UserAction[];
   conflicts: Conflict[];
   selected: string | null;
+  selectedDraft: number | null;
   includeDrafts: boolean;
   onSelect: (tdoc: string, artifactId?: number) => void;
+  onSelectDraft: (artifactId: number) => void;
   focusRequest: { tdoc: string; nonce: number } | null;
+  newArtifactPaths: ReadonlySet<string>;
+  newArtifactTdocs: ReadonlySet<string>;
   onResolve: (id: number, resolution: ConflictResolution) => void;
   onTrack: (tdoc: string, tracked: boolean) => void;
 }
@@ -52,9 +56,13 @@ export function CenterPane({
   log,
   conflicts,
   selected,
+  selectedDraft,
   includeDrafts,
   onSelect,
+  onSelectDraft,
   focusRequest,
+  newArtifactPaths,
+  newArtifactTdocs,
   onResolve,
   onTrack,
 }: Props) {
@@ -88,9 +96,13 @@ export function CenterPane({
           <LineageView
             lineage={lineage}
             selected={selected}
+            selectedDraft={selectedDraft}
             includeDrafts={includeDrafts}
             onSelect={onSelect}
+            onSelectDraft={onSelectDraft}
             focusRequest={focusRequest}
+            newArtifactPaths={newArtifactPaths}
+            newArtifactTdocs={newArtifactTdocs}
             onTrack={onTrack}
           />
         ) : null}

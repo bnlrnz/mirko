@@ -26,6 +26,9 @@ export interface Settings {
   source: SettingsSource;
   lazy_drafts: boolean;
   excel: string;
+  auto_sync: boolean;
+  meeting_interval_s: number;
+  idle_interval_s: number;
 }
 
 export interface SettingsUpdate {
@@ -39,6 +42,9 @@ export interface SettingsUpdate {
   clear_password?: boolean;
   tls: string;
   lazy_drafts: boolean;
+  auto_sync: boolean;
+  meeting_interval_s: number;
+  idle_interval_s: number;
 }
 
 export interface FetchResult {
@@ -183,6 +189,14 @@ export interface TdocDetail extends TdocSummary {
   assertions: Assertion[];
 }
 
+export interface DraftDetail extends Artifact {
+  tdoc_number: string;
+  title: string;
+  parent_title: string | null;
+  agenda_item: string | null;
+  notes: Note[];
+}
+
 export interface TimelineEvent {
   kind: string;
   occurred_at: string | null;
@@ -239,6 +253,7 @@ export interface SyncStatus {
   next_due_at: string | null;
   last_error: string | null;
   interval_s: number;
+  mode?: "meeting" | "idle";
   stale: boolean;
   refresh: Record<string, string | null>;
   counts: Record<string, number>;

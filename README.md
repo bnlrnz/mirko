@@ -23,9 +23,11 @@ The authoritative design is [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md); the glossary
 
 ## Backend
 
-Python 3.14, FastAPI, SQLite. The sync worker runs serially: remote manifest diff →
-`lftp` fetch → blob cache → Excel/HTML/filename/mail ingestion → assertions and
-conflicts. Working drafts are deferred by default: only filenames are listed until a
+Python 3.14, FastAPI, SQLite. The server starts one background poller; the sync
+worker runs serially: remote manifest diff → `lftp` fetch → blob cache →
+Excel/HTML/filename/mail ingestion → assertions and conflicts. It polls immediately
+on startup, then adapts between meeting and idle intervals with jitter and backoff.
+The UI refreshes sync status every five seconds and reloads data after a new attempt. Working drafts are deferred by default: only filenames are listed until a
 TDoc is opened or tracked, then its artifacts (and lineage neighbours on track) are
 downloaded on demand. Agenda HTML and Inbox mail remain eager.
 
@@ -57,7 +59,8 @@ nix develop -c python -m mirko <meeting-dir> \
 `--import-excel` ingests the workbook, prints the row/edge counts, and exits;
 refresh the UI afterwards. It is safe to run while the server is idle.
 
-The **Settings** panel in the web UI can edit the FTP source, toggle lazy draft
+The **Settings** panel in the web UI can edit the FTP source, enable or disable
+automatic FTP updates, set the meeting and idle update intervals, toggle lazy draft
 fetching, and upload the allocation workbook for immediate (forced) parsing. Saves are
 written atomically to `meeting.json` with mode `0600`; credentials are never returned
 by the API.
@@ -73,9 +76,12 @@ Notifications tab lists new files, decisions, and newly connected nodes for that
 tracked set. The Log tab shows persisted tracking and note actions. The Lineage
 graph can show cached working drafts as child nodes via the **Include Drafts**
 filter, renders a post-it badge for the latest note type, and infers LS-in → LS-out
-reply links from matching titles (unverified `based_on` edges). Deferred artifacts
-show as `not fetched` with a fetch button and their FTP upload timestamp; selecting a
-TDoc or tracking it triggers the download automatically.
+reply links from matching titles (unverified `based_on` edges). Clicking a draft
+opens a draft detail panel with its artifact metadata and draft-specific notes.
+Newly arrived files glow in the lineage graph; **Enable alerts** requests browser
+notification permission and raises a desktop notification for each new document.
+Deferred artifacts show as `not fetched` with a fetch button and their FTP upload
+timestamp; selecting a TDoc or tracking it triggers the download automatically.
 
 ```sh
 cd frontend
@@ -88,9 +94,9 @@ nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flak
 ## API surface
 
 Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc}`,
-`/api/tdocs/{tdoc}/timeline`, `/api/lineage`, `/api/mail`, `/api/discovery`,
-`/api/conflicts`, `/api/log`, `/api/sync/status`, `/api/export/markdown`,
-`/api/events` (SSE).
+`/api/drafts/{artifact_id}`, `/api/tdocs/{tdoc}/timeline`, `/api/lineage`,
+`/api/mail`, `/api/discovery`, `/api/conflicts`, `/api/log`, `/api/sync/status`,
+`/api/export/markdown`, `/api/events` (SSE).
 
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
 `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,

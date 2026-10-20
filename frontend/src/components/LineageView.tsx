@@ -11,9 +11,13 @@ import type { Lineage, LineageEdge, LineageNode } from "../types";
 interface Props {
   lineage: Lineage;
   selected: string | null;
+  selectedDraft?: number | null;
   includeDrafts?: boolean;
   onSelect: (tdoc: string, artifactId?: number) => void;
+  onSelectDraft?: (artifactId: number) => void;
   focusRequest?: { tdoc: string; nonce: number } | null;
+  newArtifactPaths?: ReadonlySet<string>;
+  newArtifactTdocs?: ReadonlySet<string>;
   onTrack?: (tdoc: string, tracked: boolean) => void;
 }
 
@@ -28,6 +32,7 @@ const NODE_WIDTH = 190;
 const LANE_HEIGHT = 76;
 const DEPTH_WIDTH = 230;
 const MARGIN = 36;
+const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const DRAFT_ORDER = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
@@ -313,9 +318,13 @@ function NoteBadgeIcon({
 export function LineageView({
   lineage,
   selected,
+  selectedDraft = null,
   includeDrafts = true,
   onSelect,
+  onSelectDraft,
   focusRequest,
+  newArtifactPaths = EMPTY_PATHS,
+  newArtifactTdocs = EMPTY_PATHS,
   onTrack,
 }: Props) {
   const [zoom, setZoom] = useState(1);
@@ -409,6 +418,10 @@ export function LineageView({
 
   const selectNode = (node: LineageNode) => {
     if (node.node_kind === "draft") {
+      if (onSelectDraft && node.artifact_id != null) {
+        onSelectDraft(node.artifact_id);
+        return;
+      }
       onSelect(node.attached_to ?? node.tdoc_number, node.artifact_id ?? undefined);
     } else {
       onSelect(node.tdoc_number);
@@ -592,7 +605,14 @@ export function LineageView({
               ))}
             </g>
             <g className="nodes">
-              {layout.nodes.map((node) => (
+              {layout.nodes.map((node) => {
+                const newFile =
+                  node.node_kind === "draft"
+                    ? node.logical_path
+                      ? newArtifactPaths.has(node.logical_path)
+                      : false
+                    : newArtifactTdocs.has(node.tdoc_number);
+                return (
                 <g
                   key={node.tdoc_number}
                   role="button"
@@ -601,27 +621,36 @@ export function LineageView({
                     node.node_kind === "draft"
                       ? `draft ${node.title ?? ""} for ${node.attached_to ?? ""} ${
                           node.status ?? "unknown"
-                        }${node.is_tracked ? " tracked" : ""}`
+                        }${node.is_tracked ? " tracked" : ""}${
+                          newFile ? " new file" : ""
+                        }`
                       : `${node.tdoc_number} ${node.title ?? ""} ${
                           node.decision ?? "unknown"
                         }${node.is_tracked ? " tracked" : ""}${
                           node.is_provisional ? " provisional" : ""
-                        }`
+                        }${newFile ? " new file" : ""}`
                   }
                   aria-current={
-                    node.node_kind !== "draft" && selected === node.tdoc_number
-                      ? true
-                      : undefined
+                    node.node_kind === "draft"
+                      ? selectedDraft === node.artifact_id
+                        ? true
+                        : undefined
+                      : selected === node.tdoc_number
+                        ? true
+                        : undefined
                   }
                   className={`node ${decisionClass(node)} ${
                     node.is_tracked ? "tracked" : ""
                   } ${node.is_provisional ? "provisional" : ""} ${
                     node.node_kind === "draft" ? "draft" : ""
-                  } ${
-                    node.node_kind !== "draft" &&
-                    selected === node.tdoc_number
-                      ? "selected"
-                      : ""
+                  } ${newFile ? "new-file" : ""} ${
+                    node.node_kind === "draft"
+                      ? selectedDraft === node.artifact_id
+                        ? "selected"
+                        : ""
+                      : selected === node.tdoc_number
+                        ? "selected"
+                        : ""
                   }`}
                   transform={`translate(${node.x}, ${node.y})`}
                   onClick={() => selectNode(node)}
@@ -677,7 +706,8 @@ export function LineageView({
                     {node.status ?? node.decision ?? "unknown"}
                   </text>
                 </g>
-              ))}
+                );
+              })}
             </g>
           </svg>
         </div>

@@ -154,6 +154,7 @@ everything; no absolute paths are stored.
     "excel": "S3-26_meeting_allocation.xlsx"
   },
   "poll": {
+    "auto_sync": true,
     "meeting_interval_s": 45,
     "idle_interval_s": 600,
     "mail_interval_s": 120,
@@ -590,10 +591,12 @@ stores paths only.
 
 ### 10.1 Scheduling
 
-- One worker; manual "Sync Now" enqueues a single run.
+- One background worker starts with the server when `poll.auto_sync` is true and
+  runs immediately; manual "Sync Now" serializes behind it through the same lock.
+  Saving settings can start, stop, or reschedule the worker without a restart.
 - Adaptive interval: `meeting_interval_s` inside configured meeting days/hours
   (timezone-aware), otherwise `idle_interval_s`.
-- Jitter ±`jitter`.
+- Jitter ±`jitter`; source failures back off exponentially up to `backoff_max_s`.
 - Per-source health, last attempt, last success, next due.
 - Mail poll independent (`mail_interval_s`), incremental.
 
@@ -635,6 +638,7 @@ Read:
 - `GET /api/meeting`
 - `GET /api/tdocs?agenda=&type=&release=&wi=&source=&state=&tracked=`
 - `GET /api/tdocs/{tdoc}`
+- `GET /api/drafts/{artifact_id}`
 - `GET /api/tdocs/{tdoc}/timeline`
 - `GET /api/lineage?tracked=true&include_drafts=true`
 - `GET /api/artifacts/{id}` (stream)
@@ -655,7 +659,8 @@ Write:
 - `POST /api/artifacts/{id}/open`
 - `POST /api/sync`
 - `POST /api/tdocs/{tdoc}/fetch?lineage=true` (download deferred artifacts)
-- `GET|PUT /api/settings` (source, lazy drafts; password write-only)
+- `GET|PUT /api/settings` (source, lazy drafts, auto sync and poll intervals;
+  password write-only)
 - `POST /api/import/excel?filename=...&force=true` (raw workbook body)
 - `POST /api/finalize`
 
@@ -669,7 +674,8 @@ future AI contract).
 Three-pane desktop layout, responsive enough for a narrow window.
 
 - **Top bar:** meeting selector, Sync Now, sync chip (interval/last/next/health),
-  Settings panel (FTP source, lazy drafts, workbook upload).
+  Settings panel (FTP source, automatic updates and intervals, lazy drafts,
+  workbook upload), and an **Enable alerts** control for browser notifications.
 - **Left rail:** tracked TDocs and search; a per-row tracking star; filter facets
   (agenda, type, release, WI, source, state); **Include Drafts**; mode switch.
 - **Center:** lineage view (default during meeting) or sortable table (default for
@@ -683,8 +689,10 @@ Custom SVG lane renderer, not a graph library:
 
 - lanes are lineage paths (git-log style); nodes are TDocs, with optional working
   drafts behind the **Include Drafts** filter, ordered by upload time and chained
-  ahead of the TDoc's official revision; clicking a draft opens its TDoc and
-  briefly highlights the matching artifact link;
+  ahead of the TDoc's official revision; clicking a draft opens its own detail
+  panel with artifact metadata and draft-specific notes; artifacts discovered
+  during the session highlight their draft node (or parent TDoc when no draft
+  node exists) and can raise a browser desktop notification;
 - `revision_of` = straight continuation; `merged_into` = curved convergence;
   `has_draft` = dotted child edge; `based_on` = dashed weak/inferred link;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;

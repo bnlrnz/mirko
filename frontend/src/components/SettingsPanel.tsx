@@ -29,6 +29,13 @@ export function SettingsPanel({
   const [clearPassword, setClearPassword] = useState(false);
   const [tls, setTls] = useState(settings.source.tls);
   const [lazyDrafts, setLazyDrafts] = useState(settings.lazy_drafts);
+  const [autoSync, setAutoSync] = useState(settings.auto_sync);
+  const [meetingInterval, setMeetingInterval] = useState(
+    String(settings.meeting_interval_s),
+  );
+  const [idleInterval, setIdleInterval] = useState(
+    String(settings.idle_interval_s),
+  );
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -46,6 +53,9 @@ export function SettingsPanel({
       clear_password: clearPassword,
       tls,
       lazy_drafts: lazyDrafts,
+      auto_sync: autoSync,
+      meeting_interval_s: Number(meetingInterval),
+      idle_interval_s: Number(idleInterval),
     });
   };
 
@@ -202,6 +212,42 @@ export function SettingsPanel({
 
           <fieldset>
             <legend>Sync</legend>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={autoSync}
+                onChange={(event) => setAutoSync(event.target.checked)}
+              />
+              Check for FTP updates automatically
+            </label>
+            <div className="settings-grid">
+              <label>
+                Meeting update interval (seconds)
+                <input
+                  aria-label="Meeting update interval"
+                  type="number"
+                  min={1}
+                  required
+                  value={meetingInterval}
+                  onChange={(event) => setMeetingInterval(event.target.value)}
+                />
+              </label>
+              <label>
+                Idle update interval (seconds)
+                <input
+                  aria-label="Idle update interval"
+                  type="number"
+                  min={1}
+                  required
+                  value={idleInterval}
+                  onChange={(event) => setIdleInterval(event.target.value)}
+                />
+              </label>
+            </div>
+            <p className="hint">
+              Meeting intervals apply during scheduled meeting days and hours;
+              idle intervals apply outside them.
+            </p>
             <label className="check">
               <input
                 type="checkbox"

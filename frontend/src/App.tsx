@@ -9,6 +9,7 @@ import { TopBar } from "./components/TopBar";
 import type {
   Conflict,
   ConflictResolution,
+  DraftDetail,
   Filters,
   Lineage,
   Meeting,
@@ -32,11 +33,42 @@ const EMPTY_FILTERS: Filters = {
   search: "",
 };
 
+function sendSystemNotification(
+  item: NotificationItem,
+  onOpen: (tdoc: string) => void,
+) {
+  if (
+    typeof window === "undefined" ||
+    !("Notification" in window) ||
+    window.Notification.permission !== "granted"
+  ) {
+    return;
+  }
+  const notification = new window.Notification(item.title, {
+    body: item.detail ?? item.tdocs.join(", "),
+    tag: `mirko-${item.ref}`,
+  });
+  notification.onclick = () => {
+    window.focus();
+    onOpen(item.tdocs[0] ?? "");
+    notification.close();
+  };
+}
+
+function currentNotificationPermission(): NotificationPermission | "unsupported" {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "unsupported";
+  }
+  return window.Notification.permission;
+}
+
 export default function App() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [tdocs, setTdocs] = useState<TdocSummary[]>([]);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedDraft, setSelectedDraft] = useState<number | null>(null);
+  const [draft, setDraft] = useState<DraftDetail | null>(null);
   const [lineageFocus, setLineageFocus] = useState<{
     tdoc: string;
     nonce: number;
@@ -48,6 +80,10 @@ export default function App() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [newArtifacts, setNewArtifacts] = useState<NotificationItem[]>([]);
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(currentNotificationPermission);
   const [log, setLog] = useState<UserAction[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
@@ -61,6 +97,8 @@ export default function App() {
   const [fetching, setFetching] = useState(false);
   const fetched = useRef(new Set<string>());
   const staticRequest = useRef(0);
+  const lastSyncMarker = useRef<string | null>(null);
+  const knownArtifacts = useRef<Set<string> | null>(null);
 
   const clearArtifactHighlight = useCallback(() => {
     setHighlightArtifact(null);
@@ -68,7 +106,68 @@ export default function App() {
 
   const onSelect = useCallback((tdoc: string, artifactId?: number) => {
     setSelected(tdoc);
+    setSelectedDraft(null);
+    setDraft(null);
     setHighlightArtifact(artifactId ?? null);
+    setNewArtifacts((current) =>
+      current.filter((item) => !item.tdocs.includes(tdoc)),
+    );
+  }, []);
+
+  const onSelectDraft = useCallback(
+    (artifactId: number) => {
+      setSelected(null);
+      setDraft(null);
+      setSelectedDraft(artifactId);
+      setHighlightArtifact(null);
+      const path = lineage.nodes.find(
+        (node) => node.artifact_id === artifactId,
+      )?.logical_path;
+      if (path) {
+        setNewArtifacts((current) =>
+          current.filter((item) => item.ref !== path),
+        );
+      }
+    },
+    [lineage.nodes],
+  );
+
+  const announceArtifacts = useCallback(
+    (items: NotificationItem[]) => {
+      const artifacts = items.filter((item) => item.kind === "artifact");
+      const known = knownArtifacts.current;
+      if (known === null) {
+        knownArtifacts.current = new Set(artifacts.map((item) => item.ref));
+        return;
+      }
+      const fresh = artifacts.filter((item) => !known.has(item.ref));
+      for (const item of artifacts) {
+        known.add(item.ref);
+      }
+      if (fresh.length === 0) {
+        return;
+      }
+      setNewArtifacts((current) => [
+        ...fresh,
+        ...current.filter(
+          (item) => !fresh.some((next) => next.ref === item.ref),
+        ),
+      ].slice(0, 50));
+      for (const item of fresh) {
+        sendSystemNotification(item, onSelect);
+      }
+    },
+    [onSelect],
+  );
+
+  const enableNotifications = useCallback(async () => {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window)
+    ) {
+      return;
+    }
+    setNotificationPermission(await window.Notification.requestPermission());
   }, []);
 
   const onFocusTdoc = useCallback(
@@ -111,6 +210,7 @@ export default function App() {
       setMeeting(meetingData);
       setLineage(lineageData);
       setNotifications(notificationData);
+      announceArtifacts(notificationData);
       setLog(logData);
       setSync(syncData);
       setConflicts(conflictData);
@@ -120,7 +220,7 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     }
-  }, [filters.includeEphemeral, filters.tracked]);
+  }, [announceArtifacts, filters.includeEphemeral, filters.tracked]);
 
   const refreshTdocs = useCallback(async () => {
     try {
@@ -146,6 +246,11 @@ export default function App() {
   }, [refreshTdocs]);
 
   useEffect(() => {
+    lastSyncMarker.current =
+      sync?.last_attempt_at ?? sync?.last_success_at ?? null;
+  }, [sync]);
+
+  useEffect(() => {
     if (!selected) {
       setDetail(null);
       setTimeline([]);
@@ -168,6 +273,29 @@ export default function App() {
       cancelled = true;
     };
   }, [selected]);
+
+  useEffect(() => {
+    if (selectedDraft === null) {
+      setDraft(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .draft(selectedDraft)
+      .then((data) => {
+        if (!cancelled) {
+          setDraft(data);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDraft]);
 
   const visibleTdocs = useMemo(() => {
     const needle = filters.search.trim().toLowerCase();
@@ -192,6 +320,48 @@ export default function App() {
     setDetail(detailData);
     setTimeline(events);
   }, [selected]);
+
+  const refreshDraft = useCallback(async () => {
+    if (selectedDraft === null) {
+      return;
+    }
+    setDraft(await api.draft(selectedDraft));
+  }, [selectedDraft]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void api
+        .syncStatus()
+        .then(async (status) => {
+          const marker =
+            status.last_attempt_at ?? status.last_success_at ?? null;
+          const changed =
+            marker !== null && marker !== lastSyncMarker.current;
+          setSync(status);
+          if (changed) {
+            lastSyncMarker.current = marker;
+            await Promise.all([refreshStatic(), refreshTdocs()]);
+            if (selected) {
+              await refreshDetail();
+            } else if (selectedDraft !== null) {
+              await refreshDraft();
+            }
+          }
+        })
+        .catch(() => {
+          // Keep the last known status while the backend is unavailable.
+        });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [
+    refreshDetail,
+    refreshDraft,
+    refreshStatic,
+    refreshTdocs,
+    selected,
+    selectedDraft,
+  ]);
+
 
   const onSync = useCallback(async () => {
     setBusy(true);
@@ -249,37 +419,47 @@ export default function App() {
   );
 
   const onAddNote = useCallback(
-    async (body: string, position: string) => {
-      if (!selected) {
-        return;
-      }
+    async (
+      body: string,
+      position: string,
+      target: { kind: "tdoc" | "draft"; ref: string },
+    ) => {
       try {
         await api.addNote({
-          target_kind: "tdoc",
-          target_ref: selected,
+          target_kind: target.kind,
+          target_ref: target.ref,
           body,
           position_tag: position || null,
         });
-        setDetail(await api.tdoc(selected));
-        setTimeline(await api.timeline(selected));
+        if (target.kind === "tdoc") {
+          setDetail(await api.tdoc(target.ref));
+          setTimeline(await api.timeline(target.ref));
+        } else {
+          setDraft(await api.draft(Number(target.ref)));
+        }
         await Promise.all([refreshStatic(), refreshTdocs()]);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refreshStatic, refreshTdocs, selected],
+    [refreshStatic, refreshTdocs],
   );
 
   const onDeleteNote = useCallback(
     async (noteId: number) => {
       try {
         await api.deleteNote(noteId);
-        await Promise.all([refreshDetail(), refreshStatic(), refreshTdocs()]);
+        await Promise.all([
+          refreshDetail(),
+          refreshDraft(),
+          refreshStatic(),
+          refreshTdocs(),
+        ]);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refreshDetail, refreshStatic, refreshTdocs],
+    [refreshDetail, refreshDraft, refreshStatic, refreshTdocs],
   );
 
   const onAddAssertion = useCallback(
@@ -405,6 +585,15 @@ export default function App() {
     [conflicts, selected],
   );
 
+  const newArtifactPaths = useMemo(
+    () => new Set(newArtifacts.map((item) => item.ref)),
+    [newArtifacts],
+  );
+  const newArtifactTdocs = useMemo(
+    () => new Set(newArtifacts.flatMap((item) => item.tdocs)),
+    [newArtifacts],
+  );
+
   return (
     <div className="app-shell">
       <TopBar
@@ -416,6 +605,8 @@ export default function App() {
         onExport={onExport}
         onFinalize={onFinalize}
         onSettings={onSettings}
+        notificationPermission={notificationPermission}
+        onEnableNotifications={() => void enableNotifications()}
       />
       {error ? (
         <div className="error-banner" role="alert">
@@ -442,14 +633,19 @@ export default function App() {
           log={log}
           conflicts={conflicts}
           selected={selected}
+          selectedDraft={selectedDraft}
           includeDrafts={filters.includeEphemeral}
           onSelect={onSelect}
+          onSelectDraft={onSelectDraft}
           focusRequest={lineageFocus}
+          newArtifactPaths={newArtifactPaths}
+          newArtifactTdocs={newArtifactTdocs}
           onResolve={onResolveConflict}
           onTrack={onTrack}
         />
         <DetailPanel
           detail={detail}
+          draft={draft}
           endpoint={meeting?.endpoint ?? null}
           includeEphemeral={filters.includeEphemeral}
           conflicts={selectedConflicts}

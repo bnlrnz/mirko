@@ -197,6 +197,9 @@ def test_settings_roundtrip_preserves_unknown_keys(tmp_path: Path) -> None:
     assert current["source"]["password_set"] is False
     assert current["lazy_drafts"] is True
     assert current["excel"] == "S3-26_meeting_allocation.xlsx"
+    assert current["auto_sync"] is True
+    assert current["meeting_interval_s"] == 45
+    assert current["idle_interval_s"] == 600
 
     updated = client.put(
         "/api/settings",
@@ -210,17 +213,26 @@ def test_settings_roundtrip_preserves_unknown_keys(tmp_path: Path) -> None:
             "password": "secret",
             "tls": "none",
             "lazy_drafts": False,
+            "auto_sync": False,
+            "meeting_interval_s": 30,
+            "idle_interval_s": 120,
         },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["source"]["host"] == "10.10.10.11"
     assert updated.json()["source"]["password_set"] is True
     assert updated.json()["lazy_drafts"] is False
+    assert updated.json()["auto_sync"] is False
+    assert updated.json()["meeting_interval_s"] == 30
+    assert updated.json()["idle_interval_s"] == 120
 
     saved = json.loads(folder.config_path.read_text())
     assert saved["custom"] == {"keep": True}
     assert saved["source"]["password"] == "secret"
     assert saved["sync"]["lazy_drafts"] is False
+    assert saved["poll"]["auto_sync"] is False
+    assert saved["poll"]["meeting_interval_s"] == 30
+    assert saved["poll"]["idle_interval_s"] == 120
     assert stat.S_IMODE(folder.config_path.stat().st_mode) == 0o600
     assert folder.config.source.endpoint_id == (
         "ftp://10.10.10.11:2121/Meetings_3GPP_SYNC/SA3/"
@@ -271,6 +283,38 @@ def test_fetch_endpoint_downloads_deferred_draft(tmp_path: Path) -> None:
     artifact = next(item for item in detail["artifacts"] if item["logical_path"] == draft)
     assert artifact["blob_hash"] is not None
     assert artifact["status"] == "present"
+
+    draft_detail = client.get(f"/api/drafts/{artifact['id']}")
+    assert draft_detail.status_code == 200, draft_detail.text
+    payload = draft_detail.json()
+    assert payload["tdoc_number"] == "S3-264202"
+    assert payload["logical_path"] == draft
+    assert payload["notes"] == []
+
+    note = client.post(
+        "/api/notes",
+        json={
+            "target_kind": "draft",
+            "target_ref": str(artifact["id"]),
+            "body": "Check the title.",
+            "position_tag": "Clarify",
+        },
+    )
+    assert note.status_code == 201, note.text
+    assert note.json()["target_kind"] == "draft"
+
+    draft_detail = client.get(f"/api/drafts/{artifact['id']}")
+    assert draft_detail.json()["notes"][0]["body"] == "Check the title."
+    assert client.get("/api/drafts/999999").status_code == 404
+    invalid = client.post(
+        "/api/notes",
+        json={
+            "target_kind": "draft",
+            "target_ref": "not-an-id",
+            "body": "Bad target",
+        },
+    )
+    assert invalid.status_code == 422
 
 
 def test_excel_upload_ingests_and_updates_config(tmp_path: Path) -> None:

@@ -331,6 +331,14 @@ def test_poll_validation(field: str, value: object, expected: str) -> None:
     assert expected in error_text(exc)
 
 
+def test_poll_auto_sync_validation() -> None:
+    data = minimal_config()
+    data["poll"] = {"auto_sync": "yes"}
+    with pytest.raises(ConfigError) as exc:
+        validate_config(data)
+    assert "poll.auto_sync: must be true or false" in error_text(exc)
+
+
 def test_tracked_seed_validation_and_duplicates() -> None:
     data = minimal_config()
     data["tracked_seed"] = ["S3-264481", "S3-26abcd", "s3-264388"]

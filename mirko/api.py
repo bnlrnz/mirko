@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -20,6 +21,7 @@ from mirko.ftp import FtpClient, LftpFtpClient
 from mirko.ingest.agenda_ingest import AgendaIngestor
 from mirko.meeting_folder import MeetingFolder
 from mirko.preflight import check_lftp
+from mirko.scheduler import SyncScheduler, current_interval_s
 from mirko.sync import Syncer
 from mirko.worker import SyncWorker
 
@@ -140,6 +142,14 @@ class TdocDetail(TdocSummary):
     notes: list[NoteSummary] = []
     emails: list[MailSummary] = []
     assertions: list[AssertionSummary] = []
+
+
+class DraftDetail(ArtifactSummary):
+    tdoc_number: str
+    title: str
+    parent_title: str | None = None
+    agenda_item: str | None = None
+    notes: list[NoteSummary] = []
 
 
 class TimelineEvent(BaseModel):
@@ -334,6 +344,9 @@ class SettingsResponse(BaseModel):
     source: SettingsSource
     lazy_drafts: bool
     excel: str
+    auto_sync: bool
+    meeting_interval_s: int
+    idle_interval_s: int
 
 
 class SettingsUpdate(BaseModel):
@@ -347,6 +360,9 @@ class SettingsUpdate(BaseModel):
     clear_password: bool = False
     tls: str = "none"
     lazy_drafts: bool = True
+    auto_sync: bool | None = None
+    meeting_interval_s: int | None = None
+    idle_interval_s: int | None = None
 
 
 class ExcelImportResponse(BaseModel):
@@ -372,6 +388,7 @@ class SyncStatusResponse(BaseModel):
     next_due_at: str | None = None
     last_error: str | None = None
     interval_s: int
+    mode: str
     stale: bool
     refresh: dict[str, str | None] = {}
     counts: dict[str, int] = {}
@@ -389,13 +406,50 @@ def create_app(
     *,
     ftp_client: FtpClient | None = None,
     clock: Callable[[], datetime] | None = None,
+    auto_sync: bool | None = None,
 ) -> FastAPI:
     folder = _as_folder(meeting)
-    app = FastAPI(title="Mirko", version=__version__)
+    initial_auto_sync = (
+        folder.config.poll.auto_sync if auto_sync is None else auto_sync
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.started = True
+        if initial_auto_sync:
+            start_scheduler(app)
+        try:
+            yield
+        finally:
+            app.state.started = False
+            stop_scheduler(app)
+
+    app = FastAPI(title="Mirko", version=__version__, lifespan=lifespan)
     app.state.folder = folder
     app.state.ftp_client = ftp_client
     app.state.clock = clock
+    app.state.scheduler = None
+    app.state.started = False
     settings_lock = threading.Lock()
+    sync_lock = threading.Lock()
+
+    def start_scheduler(target: FastAPI) -> None:
+        if not target.state.started:
+            return
+        if target.state.scheduler is None:
+            target.state.scheduler = SyncScheduler(
+                folder, target.state.run_sync, clock=clock
+            )
+        target.state.scheduler.start()
+
+    def stop_scheduler(target: FastAPI, *, wait: bool = True) -> None:
+        scheduler = target.state.scheduler
+        if scheduler is None:
+            return
+        scheduler.stop(timeout=5.0 if wait else 0.0)
+
+    app.state.start_scheduler = lambda: start_scheduler(app)
+    app.state.stop_scheduler = lambda: stop_scheduler(app)
 
     def with_connection(call):
         connection = folder.connect()
@@ -403,6 +457,17 @@ def create_app(
             return call(connection)
         finally:
             connection.close()
+
+    def run_sync():
+        kwargs: dict[str, Any] = {}
+        if app.state.ftp_client is not None:
+            kwargs["client"] = app.state.ftp_client
+        if app.state.clock is not None:
+            kwargs["clock"] = app.state.clock
+        with sync_lock:
+            return SyncWorker(folder, **kwargs).run()
+
+    app.state.run_sync = run_sync
 
     @app.get("/api/meeting", response_model=MeetingResponse)
     def get_meeting() -> MeetingResponse:
@@ -441,6 +506,9 @@ def create_app(
             ),
             lazy_drafts=config.sync.lazy_drafts,
             excel=config.paths.excel,
+            auto_sync=config.poll.auto_sync,
+            meeting_interval_s=config.poll.meeting_interval_s,
+            idle_interval_s=config.poll.idle_interval_s,
         )
 
     @app.get("/api/settings", response_model=SettingsResponse)
@@ -474,12 +542,24 @@ def create_app(
                 source.pop("password_env", None)
             sync = data.setdefault("sync", {})
             sync["lazy_drafts"] = payload.lazy_drafts
+            poll = data.setdefault("poll", {})
+            if payload.auto_sync is not None:
+                poll["auto_sync"] = payload.auto_sync
+            if payload.meeting_interval_s is not None:
+                poll["meeting_interval_s"] = payload.meeting_interval_s
+            if payload.idle_interval_s is not None:
+                poll["idle_interval_s"] = payload.idle_interval_s
             try:
                 folder.update_config(data)
             except ConfigError as exc:
                 raise HTTPException(
                     status_code=422, detail=list(exc.errors)
                 ) from None
+        if folder.config.poll.auto_sync:
+            stop_scheduler(app)
+            start_scheduler(app)
+        else:
+            stop_scheduler(app)
         return settings_response()
 
     @app.post("/api/import/excel", response_model=ExcelImportResponse)
@@ -568,6 +648,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="tdoc not found")
         return result
 
+    @app.get("/api/drafts/{artifact_id}", response_model=DraftDetail)
+    def get_draft(artifact_id: int) -> dict:
+        result = with_connection(
+            lambda connection: repository.get_draft(connection, artifact_id)
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="draft not found")
+        return result
+
     @app.get(
         "/api/tdocs/{tdoc_number}/timeline",
         response_model=list[TimelineEvent],
@@ -631,22 +720,23 @@ def create_app(
 
     @app.get("/api/sync/status", response_model=SyncStatusResponse)
     def get_sync_status() -> dict:
+        now = app.state.clock() if app.state.clock is not None else datetime.now(
+            timezone.utc
+        )
+        interval_s, mode = current_interval_s(folder.config, now)
         return with_connection(
             lambda connection: repository.sync_status(
                 connection,
                 endpoint_id=folder.config.source.endpoint_id,
-                poll_interval_s=folder.config.poll.meeting_interval_s,
+                poll_interval_s=interval_s,
+                poll_mode=mode,
+                now=now,
             )
         )
 
     @app.post("/api/sync", response_model=SyncResponse)
     def post_sync() -> dict:
-        kwargs: dict[str, Any] = {}
-        if app.state.ftp_client is not None:
-            kwargs["client"] = app.state.ftp_client
-        if app.state.clock is not None:
-            kwargs["clock"] = app.state.clock
-        return SyncWorker(folder, **kwargs).run().as_dict()
+        return app.state.run_sync().as_dict()
 
     @app.post(
         "/api/tdocs/{tdoc_number}/fetch", response_model=FetchResponse
@@ -718,6 +808,20 @@ def create_app(
             )
             if exists is None:
                 raise HTTPException(status_code=404, detail="tdoc not found")
+        elif payload.target_kind == "draft":
+            try:
+                artifact_id = int(payload.target_ref)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422, detail="draft target_ref must be an id"
+                ) from None
+            exists = with_connection(
+                lambda connection: repository.get_draft(
+                    connection, artifact_id
+                )
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="draft not found")
         return with_connection(
             lambda connection: repository.add_note(
                 connection,

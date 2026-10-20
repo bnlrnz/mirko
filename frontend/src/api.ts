@@ -2,6 +2,7 @@ import type {
   Assertion,
   Conflict,
   ConflictResolution,
+  DraftDetail,
   ExcelImportResult,
   FetchResult,
   Lineage,
@@ -47,6 +48,8 @@ export const api = {
     request<TdocSummary[]>(`/api/tdocs${query(params)}`),
   tdoc: (tdoc: string) =>
     request<TdocDetail>(`/api/tdocs/${encodeURIComponent(tdoc)}`),
+  draft: (artifactId: number) =>
+    request<DraftDetail>(`/api/drafts/${artifactId}`),
   timeline: (tdoc: string) =>
     request<TimelineEvent[]>(
       `/api/tdocs/${encodeURIComponent(tdoc)}/timeline`,

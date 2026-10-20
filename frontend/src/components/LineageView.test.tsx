@@ -55,6 +55,7 @@ describe("LineageView", () => {
 
   it("shows working drafts only when included", () => {
     const onSelect = vi.fn();
+    const onSelectDraft = vi.fn();
     const withDraft: Lineage = {
       ...lineage,
       nodes: [
@@ -67,6 +68,7 @@ describe("LineageView", () => {
           node_kind: "draft",
           attached_to: "S3-264202",
           artifact_id: 1,
+          logical_path: "Inbox/Drafts/draft S3-264202-r1.docx",
           status: "present",
         },
       ],
@@ -88,6 +90,11 @@ describe("LineageView", () => {
         selected={null}
         includeDrafts
         onSelect={onSelect}
+        onSelectDraft={onSelectDraft}
+        newArtifactPaths={
+          new Set(["Inbox/Drafts/draft S3-264202-r1.docx"])
+        }
+        newArtifactTdocs={new Set(["S3-264202"])}
       />,
     );
     expect(screen.getByText("3 nodes")).toBeInTheDocument();
@@ -97,8 +104,15 @@ describe("LineageView", () => {
     const draft = screen.getByRole("button", {
       name: /draft draft S3-264202-r1.docx for S3-264202 present tracked/,
     });
+    expect(draft).toHaveClass("new-file");
+    expect(
+      screen.getByRole("button", {
+        name: /S3-264202 Original CR revised tracked/,
+      }),
+    ).toHaveClass("new-file");
     fireEvent.click(draft);
-    expect(onSelect).toHaveBeenCalledWith("S3-264202", 1);
+    expect(onSelectDraft).toHaveBeenCalledWith(1);
+    expect(onSelect).not.toHaveBeenCalled();
 
     expect(
       screen.queryByRole("checkbox", { name: "Drafts" }),

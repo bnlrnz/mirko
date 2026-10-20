@@ -1,6 +1,7 @@
 import type {
   Assertion,
   Conflict,
+  DraftDetail,
   Lineage,
   Meeting,
   NotificationItem,
@@ -219,6 +220,15 @@ export const detail: TdocDetail = {
   ],
 };
 
+export const draft: DraftDetail = {
+  ...detail.artifacts[0],
+  tdoc_number: "S3-264202",
+  title: "draft S3-264202-r1.docx",
+  parent_title: "Original CR",
+  agenda_item: "5.3.1.3",
+  notes: [],
+};
+
 export const timeline: TimelineEvent[] = [
   {
     kind: "discovered",
@@ -332,6 +342,7 @@ export const sync: SyncStatus = {
   next_due_at: "2026-10-16T12:00:45.000000Z",
   last_error: null,
   interval_s: 45,
+  mode: "meeting",
   stale: false,
   refresh: { drafts: "2026-10-16T12:00:00.000000Z" },
   counts: { tdocs: 2, artifacts: 1, emails: 1, open_conflicts: 0 },
@@ -352,4 +363,7 @@ export const settings: Settings = {
   },
   lazy_drafts: true,
   excel: "S3-26_meeting_allocation.xlsx",
+  auto_sync: true,
+  meeting_interval_s: 45,
+  idle_interval_s: 600,
 };

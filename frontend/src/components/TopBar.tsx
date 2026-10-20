@@ -9,6 +9,8 @@ interface Props {
   onExport: () => void;
   onFinalize: () => void;
   onSettings: () => void;
+  notificationPermission: NotificationPermission | "unsupported";
+  onEnableNotifications: () => void;
 }
 
 function freshness(value: string | null | undefined): string {
@@ -28,6 +30,8 @@ export function TopBar({
   onExport,
   onFinalize,
   onSettings,
+  notificationPermission,
+  onEnableNotifications,
 }: Props) {
   return (
     <header className="top-bar">
@@ -46,6 +50,27 @@ export function TopBar({
         <button type="button" onClick={onSettings}>
           Settings
         </button>
+        {notificationPermission === "default" ? (
+          <button type="button" onClick={onEnableNotifications}>
+            Enable alerts
+          </button>
+        ) : null}
+        {notificationPermission === "granted" ? (
+          <span
+            className="alert-chip"
+            title="Desktop notifications are enabled"
+          >
+            alerts on
+          </span>
+        ) : null}
+        {notificationPermission === "denied" ? (
+          <span
+            className="alert-chip blocked"
+            title="Desktop notifications are blocked in the browser"
+          >
+            alerts blocked
+          </span>
+        ) : null}
         {exportPath ? (
           <a className="export-link" href={`/${exportPath}`}>
             latest export
@@ -56,8 +81,23 @@ export function TopBar({
           <span title={sync?.endpoint ?? ""}>
             {sync?.endpoint ?? "No endpoint"}
           </span>
-          <span>every {sync?.interval_s ?? "–"}s</span>
-          <span>last {freshness(sync?.last_success_at)}</span>
+          <span
+            title={
+              sync?.mode === "idle"
+                ? "Idle outside configured meeting days/hours"
+                : "Meeting-day polling interval"
+            }
+          >
+            every {sync?.interval_s ?? "–"}s
+            {sync?.mode === "idle" ? " (idle)" : ""}
+          </span>
+          <span title={sync?.last_error ?? ""}>
+            checked{" "}
+            {freshness(sync?.last_attempt_at ?? sync?.last_success_at)}
+          </span>
+          {sync?.next_due_at ? (
+            <span>next {freshness(sync.next_due_at)}</span>
+          ) : null}
           {sync?.stale ? <strong>stale</strong> : null}
         </div>
         <button

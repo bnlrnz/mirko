@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
 
-import type { Conflict, ConflictResolution, TdocDetail } from "../types";
+import type {
+  Conflict,
+  ConflictResolution,
+  DraftDetail,
+  Note,
+  TdocDetail,
+} from "../types";
+
+interface NoteTarget {
+  kind: "tdoc" | "draft";
+  ref: string;
+}
 
 interface Props {
   detail: TdocDetail | null;
+  draft: DraftDetail | null;
   endpoint: string | null;
   includeEphemeral: boolean;
   conflicts: Conflict[];
   onTrack: (tdoc: string, tracked: boolean) => void;
-  onAddNote: (body: string, position: string) => void;
+  onAddNote: (body: string, position: string, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
   onAddAssertion: (subject: string, predicate: string, object: string) => void;
   onResolveConflict: (id: number, resolution: ConflictResolution) => void;
@@ -53,8 +65,177 @@ function value(value: string | number | boolean | null | undefined): string {
   return String(value);
 }
 
+function NoteSection({
+  notes,
+  target,
+  onAddNote,
+  onDeleteNote,
+}: {
+  notes: Note[];
+  target: NoteTarget;
+  onAddNote: (body: string, position: string, target: NoteTarget) => void;
+  onDeleteNote: (id: number) => void;
+}) {
+  const [note, setNote] = useState("");
+  const [position, setPosition] = useState("");
+
+  return (
+    <section>
+      <h3>Notes <span className="count">{notes.length}</span></h3>
+      {notes.length === 0 ? (
+        <p className="empty">No notes yet.</p>
+      ) : (
+        <ul className="note-list">
+          {notes.map((item) => (
+            <li key={item.id}>
+              {item.position_tag ? (
+                <span className={`badge position-${item.position_tag.toLowerCase()}`}>
+                  {item.position_tag}
+                </span>
+              ) : null}
+              <p className="note-body">{item.body}</p>
+              <small>{item.author ?? item.source} · {item.created_at}</small>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => onDeleteNote(item.id)}
+              >
+                delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="note-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!note.trim()) {
+            return;
+          }
+          onAddNote(note.trim(), position, target);
+          setNote("");
+        }}
+      >
+        <textarea
+          aria-label="New note"
+          placeholder="Add a note…"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+        <div className="note-actions">
+          <select
+            aria-label="Position tag"
+            value={position}
+            onChange={(event) => setPosition(event.target.value)}
+          >
+            <option value="">No tag</option>
+            <option>Support</option>
+            <option>Object</option>
+            <option>Clarify</option>
+          </select>
+          <button type="submit" className="primary">Add note</button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function DraftDetailPanel({
+  draft,
+  endpoint,
+  onAddNote,
+  onDeleteNote,
+  onSelect,
+}: {
+  draft: DraftDetail;
+  endpoint: string | null;
+  onAddNote: (body: string, position: string, target: NoteTarget) => void;
+  onDeleteNote: (id: number) => void;
+  onSelect: (tdoc: string) => void;
+}) {
+  const href = artifactUrl(endpoint, draft.logical_path);
+  return (
+    <aside
+      className="detail-panel"
+      aria-label={`Detail for draft ${draft.title}`}
+    >
+      <header className="detail-header">
+        <div>
+          <h2>{draft.title}</h2>
+          <p>Working draft for {draft.tdoc_number}</p>
+        </div>
+        <button type="button" onClick={() => onSelect(draft.tdoc_number)}>
+          Open parent TDoc
+        </button>
+      </header>
+
+      <div className="detail-badges">
+        <span className="badge kind-working_draft">working draft</span>
+        <span className="badge">{draft.status}</span>
+        {draft.is_ephemeral ? <span className="badge">ephemeral</span> : null}
+      </div>
+
+      <dl className="metadata">
+        <dt>Parent</dt>
+        <dd>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => onSelect(draft.tdoc_number)}
+          >
+            {draft.tdoc_number}
+          </button>
+        </dd>
+        <dt>Parent title</dt>
+        <dd>{value(draft.parent_title)}</dd>
+        <dt>Agenda</dt>
+        <dd>{value(draft.agenda_item)}</dd>
+        <dt>FTP status</dt>
+        <dd>{value(draft.status)}</dd>
+        <dt>FTP uploaded</dt>
+        <dd>{value(draft.remote_mtime)}</dd>
+        <dt>Size</dt>
+        <dd>{draft.remote_size ? `${draft.remote_size} B` : "—"}</dd>
+        <dt>Path</dt>
+        <dd>{draft.logical_path}</dd>
+      </dl>
+
+      <section>
+        <h3>File</h3>
+        <ul className="artifact-list">
+          <li>
+            {href ? (
+              <a href={href} target="_blank" rel="noreferrer">
+                {draft.title}
+              </a>
+            ) : (
+              <span>{draft.title}</span>
+            )}
+            <small>
+              {draft.blob_hash === null ? "not fetched" : "cached"}
+              {draft.remote_mtime
+                ? ` · FTP uploaded ${draft.remote_mtime}`
+                : ""}
+            </small>
+          </li>
+        </ul>
+      </section>
+
+      <NoteSection
+        key={`draft:${draft.id}`}
+        notes={draft.notes}
+        target={{ kind: "draft", ref: String(draft.id) }}
+        onAddNote={onAddNote}
+        onDeleteNote={onDeleteNote}
+      />
+    </aside>
+  );
+}
+
 export function DetailPanel({
   detail,
+  draft,
   endpoint,
   includeEphemeral,
   conflicts,
@@ -69,8 +250,6 @@ export function DetailPanel({
   highlightArtifactId,
   onClearArtifactHighlight,
 }: Props) {
-  const [note, setNote] = useState("");
-  const [position, setPosition] = useState("");
   const [predicate, setPredicate] = useState("revision_of");
   const [linkTarget, setLinkTarget] = useState("");
 
@@ -92,6 +271,18 @@ export function DetailPanel({
     highlightedArtifactVisible,
     onClearArtifactHighlight,
   ]);
+
+  if (draft) {
+    return (
+      <DraftDetailPanel
+        draft={draft}
+        endpoint={endpoint}
+        onAddNote={onAddNote}
+        onDeleteNote={onDeleteNote}
+        onSelect={onSelect}
+      />
+    );
+  }
 
   if (!detail) {
     return (
@@ -242,64 +433,13 @@ export function DetailPanel({
         )}
       </section>
 
-      <section>
-        <h3>Notes <span className="count">{detail.notes.length}</span></h3>
-        {detail.notes.length === 0 ? (
-          <p className="empty">No notes yet.</p>
-        ) : (
-          <ul className="note-list">
-            {detail.notes.map((item) => (
-              <li key={item.id}>
-                {item.position_tag ? (
-                  <span className={`badge position-${item.position_tag.toLowerCase()}`}>
-                    {item.position_tag}
-                  </span>
-                ) : null}
-                <p className="note-body">{item.body}</p>
-                <small>{item.author ?? item.source} · {item.created_at}</small>
-                <button
-                  type="button"
-                  className="link-button"
-                  onClick={() => onDeleteNote(item.id)}
-                >
-                  delete
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <form
-          className="note-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!note.trim()) {
-              return;
-            }
-            onAddNote(note.trim(), position);
-            setNote("");
-          }}
-        >
-          <textarea
-            aria-label="New note"
-            placeholder="Add a note…"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
-          <div className="note-actions">
-            <select
-              aria-label="Position tag"
-              value={position}
-              onChange={(event) => setPosition(event.target.value)}
-            >
-              <option value="">No tag</option>
-              <option>Support</option>
-              <option>Object</option>
-              <option>Clarify</option>
-            </select>
-            <button type="submit" className="primary">Add note</button>
-          </div>
-        </form>
-      </section>
+      <NoteSection
+        key={`tdoc:${detail.tdoc_number}`}
+        notes={detail.notes}
+        target={{ kind: "tdoc", ref: detail.tdoc_number }}
+        onAddNote={onAddNote}
+        onDeleteNote={onDeleteNote}
+      />
 
       {conflicts.length > 0 ? (
         <section>

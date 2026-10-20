@@ -182,7 +182,7 @@ def seeded_folder(tmp_path: Path) -> MeetingFolder:
 
 @pytest.fixture()
 def client(seeded_folder: MeetingFolder) -> TestClient:
-    return TestClient(create_app(seeded_folder))
+    return TestClient(create_app(seeded_folder, clock=lambda: NOW))
 
 
 def test_list_tdocs_and_filters(client: TestClient) -> None:
@@ -408,6 +408,7 @@ def test_sync_status_exposes_freshness_and_counts(client: TestClient) -> None:
     data = response.json()
     assert data["endpoint"] == "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3"
     assert data["interval_s"] == 45
+    assert data["mode"] == "meeting"
     assert data["counts"]["tdocs"] >= 3
     assert data["counts"]["emails"] == 2
     assert data["counts"]["open_conflicts"] == 1

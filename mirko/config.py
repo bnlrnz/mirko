@@ -53,6 +53,7 @@ _MAIL_KEYS = frozenset({"kind", "path", "eml_dir"})
 _PATHS_KEYS = frozenset({"drafts", "inbox", "agenda_glob", "excel"})
 _POLL_KEYS = frozenset(
     {
+        "auto_sync",
         "meeting_interval_s",
         "idle_interval_s",
         "mail_interval_s",
@@ -159,6 +160,7 @@ class PathSettings:
 
 @dataclass(frozen=True)
 class PollSettings:
+    auto_sync: bool = True
     meeting_interval_s: int = 45
     idle_interval_s: int = 600
     mail_interval_s: int = 120
@@ -606,6 +608,9 @@ def _validate_paths(data: Mapping[str, Any], issues: _Issues) -> PathSettings:
 def _validate_poll(data: Mapping[str, Any], issues: _Issues) -> PollSettings:
     value = _object(data, "poll", "", issues, allowed=_POLL_KEYS)
     return PollSettings(
+        auto_sync=_boolean(
+            value, "auto_sync", "poll", issues, default=True
+        ),
         meeting_interval_s=_integer(
             value, "meeting_interval_s", "poll", issues, default=45, minimum=1
         ),

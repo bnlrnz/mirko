@@ -175,6 +175,43 @@ def get_tdoc(connection: sqlite3.Connection, tdoc_number: str) -> dict | None:
     return data
 
 
+def get_draft(connection: sqlite3.Connection, artifact_id: int) -> dict | None:
+    row = connection.execute(
+        "SELECT a.*, t.title AS tdoc_title, t.agenda_item AS agenda_item "
+        "FROM artifact a JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
+        "WHERE a.id = ? AND a.kind = 'working_draft'",
+        (artifact_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    data = {
+        "id": row["id"],
+        "tdoc_number": row["tdoc_number"],
+        "title": row["filename"] or row["logical_path"],
+        "parent_title": row["tdoc_title"],
+        "agenda_item": row["agenda_item"],
+        "kind": row["kind"],
+        "logical_path": row["logical_path"],
+        "filename": row["filename"],
+        "status": row["status"],
+        "is_ephemeral": bool(row["is_ephemeral"]),
+        "blob_hash": row["blob_hash"],
+        "remote_size": row["remote_size"],
+        "remote_mtime": row["remote_mtime"],
+        "first_seen_at": row["first_seen_at"],
+        "last_seen_at": row["last_seen_at"],
+    }
+    data["notes"] = [
+        _note_row(note)
+        for note in connection.execute(
+            "SELECT * FROM note WHERE target_kind = 'draft' AND target_ref = ? "
+            "ORDER BY created_at, id",
+            (str(artifact_id),),
+        )
+    ]
+    return data
+
+
 def _note_row(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -733,11 +770,25 @@ def notifications(
     return items[:limit]
 
 
+def set_next_due(
+    connection: sqlite3.Connection,
+    *,
+    endpoint_id: str,
+    next_due_at: str,
+) -> None:
+    connection.execute(
+        "UPDATE sync_state SET next_due_at = ? WHERE endpoint_id = ?",
+        (next_due_at, endpoint_id),
+    )
+    connection.commit()
+
+
 def sync_status(
     connection: sqlite3.Connection,
     *,
     endpoint_id: str,
     poll_interval_s: int,
+    poll_mode: str = "meeting",
     now: datetime | None = None,
 ) -> dict:
     moment = now or datetime.now(timezone.utc)
@@ -798,6 +849,7 @@ def sync_status(
         "next_due_at": next_due,
         "last_error": last_error,
         "interval_s": poll_interval_s,
+        "mode": poll_mode,
         "stale": last_sync is None,
         "refresh": refresh,
         "counts": {
