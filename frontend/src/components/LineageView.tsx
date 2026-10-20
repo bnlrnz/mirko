@@ -113,14 +113,31 @@ function edgePath(edge: LineageEdge, positions: Map<string, PositionedNode>) {
   return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
 }
 
+const STATE_CLASSES: Record<string, string> = {
+  approved: "state-approved",
+  agreed: "state-approved",
+  merged: "state-merged",
+  revised: "state-merged",
+  noted: "state-noted",
+  postponed: "state-noted",
+  "not treated": "state-idle",
+  "not pursued": "state-idle",
+  reserved: "state-idle",
+  withdrawn: "state-negative",
+  rejected: "state-negative",
+};
+
+const LEGEND = [
+  ["state-approved", "approved / agreed"],
+  ["state-merged", "merged / revised"],
+  ["state-noted", "noted / postponed"],
+  ["state-idle", "not treated / reserved"],
+  ["state-negative", "withdrawn / rejected"],
+] as const;
+
 function decisionClass(node: LineageNode): string {
-  if (node.is_provisional) {
-    return "provisional";
-  }
-  if (node.is_tracked) {
-    return "tracked";
-  }
-  return node.decision ? `state-${node.decision.replace(/\s+/g, "-")}` : "open";
+  const decision = (node.decision ?? "").trim().toLowerCase();
+  return STATE_CLASSES[decision] ?? "state-idle";
 }
 
 export function LineageView({ lineage, selected, onSelect }: Props) {
@@ -145,6 +162,14 @@ export function LineageView({ lineage, selected, onSelect }: Props) {
       <div className="lineage-toolbar">
         <span>{lineage.nodes.length} nodes</span>
         <span>{lineage.edges.length} edges</span>
+        <span className="lineage-legend" aria-label="Node state colors">
+          {LEGEND.map(([className, label]) => (
+            <span key={className} className="legend-item">
+              <i className={`legend-swatch ${className}`} />
+              {label}
+            </span>
+          ))}
+        </span>
         <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>
           −
         </button>
@@ -185,9 +210,13 @@ export function LineageView({ lineage, selected, onSelect }: Props) {
                   key={node.tdoc_number}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${node.tdoc_number} ${node.title ?? ""}`}
+                  aria-label={`${node.tdoc_number} ${node.title ?? ""} ${
+                    node.decision ?? "unknown"
+                  }${node.is_tracked ? " tracked" : ""}`}
                   aria-current={selected === node.tdoc_number || undefined}
                   className={`node ${decisionClass(node)} ${
+                    node.is_tracked ? "tracked" : ""
+                  } ${node.is_provisional ? "provisional" : ""} ${
                     selected === node.tdoc_number ? "selected" : ""
                   }`}
                   transform={`translate(${node.x}, ${node.y})`}
@@ -200,16 +229,22 @@ export function LineageView({ lineage, selected, onSelect }: Props) {
                   }}
                 >
                   <rect width={NODE_WIDTH} height={LANE_HEIGHT - 12} rx={9} />
-                  <circle cx={18} cy={22} r={6} />
+                  <circle cx={18} cy={22} r={7} className="state-bubble">
+                    <title>{node.decision ?? "unknown"}</title>
+                  </circle>
                   <text x={32} y={26} className="node-id">
                     {node.tdoc_number}
                   </text>
+                  {node.is_tracked ? (
+                    <text x={NODE_WIDTH - 16} y={27} className="node-star">
+                      ★
+                    </text>
+                  ) : null}
                   <text x={14} y={48} className="node-title">
                     {(node.title ?? "Untitled").slice(0, 26)}
                   </text>
                   <text x={14} y={62} className="node-meta">
                     {node.decision ?? "unknown"}
-                    {node.is_tracked ? " · tracked" : ""}
                     {node.is_provisional ? " · provisional" : ""}
                   </text>
                 </g>

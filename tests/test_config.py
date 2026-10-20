@@ -13,6 +13,7 @@ from mirko.config import (
     MailSettings,
     PathSettings,
     PollSettings,
+    SyncSettings,
     UiSettings,
     load_config,
     validate_config,
@@ -52,6 +53,8 @@ def test_minimal_config_uses_defaults() -> None:
     assert config.mail is None
     assert config.paths == PathSettings()
     assert config.poll == PollSettings()
+    assert config.sync == SyncSettings()
+    assert config.sync.lazy_drafts is True
     assert config.ui == UiSettings()
     assert config.tracked_seed == ()
     assert config.warnings == ()

@@ -110,7 +110,11 @@ class AgendaIngestor:
         )
 
     def ingest_excel(
-        self, data: bytes, *, path: str | None = None
+        self,
+        data: bytes,
+        *,
+        path: str | None = None,
+        force: bool = False,
     ) -> AgendaIngestResult:
         """Ingest the pre-meeting allocation workbook.
 
@@ -125,6 +129,7 @@ class AgendaIngestor:
             kind=EXCEL_KIND,
             source="excel",
             path=path,
+            force=force,
         )
 
     def _persist(
@@ -135,6 +140,7 @@ class AgendaIngestor:
         kind: str,
         source: str,
         path: str | None,
+        force: bool = False,
     ) -> AgendaIngestResult:
         content_hash = hashlib.sha256(raw).hexdigest()
         observed_at = _utc_timestamp(self.clock())
@@ -142,7 +148,11 @@ class AgendaIngestor:
         connection = self.folder.connect()
         try:
             previous = self._latest_run(connection, kind)
-            if previous is not None and previous["content_hash"] == content_hash:
+            if (
+                not force
+                and previous is not None
+                and previous["content_hash"] == content_hash
+            ):
                 return AgendaIngestResult(
                     status="unchanged",
                     ingest_run_id=int(previous["id"]),

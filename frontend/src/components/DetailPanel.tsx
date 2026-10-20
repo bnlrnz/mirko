@@ -12,6 +12,8 @@ interface Props {
   onAddAssertion: (subject: string, predicate: string, object: string) => void;
   onResolveConflict: (id: number, resolution: ConflictResolution) => void;
   onSelect: (tdoc: string) => void;
+  onFetch: () => void;
+  fetching: boolean;
 }
 
 function value(value: string | number | boolean | null | undefined): string {
@@ -31,6 +33,8 @@ export function DetailPanel({
   onAddAssertion,
   onResolveConflict,
   onSelect,
+  onFetch,
+  fetching,
 }: Props) {
   const [note, setNote] = useState("");
   const [position, setPosition] = useState("");
@@ -51,6 +55,11 @@ export function DetailPanel({
   const artifacts = detail.artifacts.filter(
     (artifact) => includeEphemeral || !artifact.is_ephemeral,
   );
+  const missing = artifacts.filter(
+    (artifact) =>
+      artifact.blob_hash === null &&
+      (artifact.status === "remote" || artifact.status === "failed"),
+  ).length;
 
   return (
     <aside className="detail-panel" aria-label={`Detail for ${detail.tdoc_number}`}>
@@ -102,7 +111,19 @@ export function DetailPanel({
       ) : null}
 
       <section>
-        <h3>Artifacts <span className="count">{artifacts.length}</span></h3>
+        <h3>
+          Artifacts <span className="count">{artifacts.length}</span>
+          {missing > 0 ? (
+            <button
+              type="button"
+              className="fetch-button"
+              onClick={onFetch}
+              disabled={fetching}
+            >
+              {fetching ? "Fetching…" : `Fetch missing (${missing})`}
+            </button>
+          ) : null}
+        </h3>
         {artifacts.length === 0 ? (
           <p className="empty">No cached artifacts.</p>
         ) : (
@@ -112,9 +133,14 @@ export function DetailPanel({
                 <span className={`badge kind-${artifact.kind}`}>{artifact.kind}</span>
                 <span>{artifact.filename ?? artifact.logical_path}</span>
                 <small>
-                  {artifact.status}
+                  {artifact.status === "remote"
+                    ? "not fetched"
+                    : artifact.status}
                   {artifact.is_ephemeral ? " · ephemeral" : ""}
                   {artifact.remote_size ? ` · ${artifact.remote_size} B` : ""}
+                  {artifact.remote_mtime
+                    ? ` · FTP uploaded ${artifact.remote_mtime}`
+                    : ""}
                 </small>
               </li>
             ))}

@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mirko import __version__
 from mirko import repository
+from mirko.config import ConfigError
 from mirko.export import export_markdown, finalize, render_markdown
-from mirko.ftp import FtpClient
+from mirko.ftp import FtpClient, LftpFtpClient
+from mirko.ingest.agenda_ingest import AgendaIngestor
 from mirko.meeting_folder import MeetingFolder
 from mirko.preflight import check_lftp
+from mirko.sync import Syncer
 from mirko.worker import SyncWorker
 
 LOOPBACK_HOST = "127.0.0.1"
@@ -82,6 +86,7 @@ class ArtifactSummary(BaseModel):
     is_ephemeral: bool
     blob_hash: str | None = None
     remote_size: int | None = None
+    remote_mtime: str | None = None
     first_seen_at: str | None = None
     last_seen_at: str | None = None
 
@@ -188,6 +193,18 @@ class DiscoveryItem(BaseModel):
     created_at: str | None = None
 
 
+class NotificationItem(BaseModel):
+    kind: str
+    ref: str
+    title: str
+    detail: str | None = None
+    tdocs: list[str] = []
+    agenda_item: str | None = None
+    created_at: str | None = None
+    action: Literal["track"] | None = None
+    action_ref: str | None = None
+
+
 class TrackResponse(BaseModel):
     tdoc_number: str
     is_tracked: bool
@@ -278,10 +295,57 @@ class FinalizeResponse(BaseModel):
 class SyncResponse(BaseModel):
     status: str
     fetched: int
+    deferred: int = 0
     agenda: str | None = None
     drafts: dict[str, Any] | None = None
     mail: dict[str, Any] | None = None
     errors: list[str] = []
+
+
+class SettingsSource(BaseModel):
+    kind: str
+    protocol: str
+    host: str
+    port: int | None = None
+    base_path: str
+    username: str | None = None
+    password_set: bool = False
+    password_env: str | None = None
+    tls: str
+
+
+class SettingsResponse(BaseModel):
+    source: SettingsSource
+    lazy_drafts: bool
+    excel: str
+
+
+class SettingsUpdate(BaseModel):
+    kind: str
+    protocol: str
+    host: str
+    port: int | None = None
+    base_path: str
+    username: str | None = None
+    password: str | None = None
+    clear_password: bool = False
+    tls: str = "none"
+    lazy_drafts: bool = True
+
+
+class ExcelImportResponse(BaseModel):
+    status: str
+    path: str
+    row_count: int
+    edge_count: int
+    issue_count: int
+
+
+class FetchResponse(BaseModel):
+    tdoc_number: str
+    fetched: int
+    artifacts: list[str] = []
+    failures: list[str] = []
 
 
 class SyncStatusResponse(BaseModel):
@@ -315,6 +379,7 @@ def create_app(
     app.state.folder = folder
     app.state.ftp_client = ftp_client
     app.state.clock = clock
+    settings_lock = threading.Lock()
 
     def with_connection(call):
         connection = folder.connect()
@@ -339,6 +404,106 @@ def create_app(
             tdoc_series_prefix=config.meeting.tdoc_series_prefix,
             source_kind=config.source.kind,
             endpoint=config.source.endpoint_id,
+        )
+
+    def settings_response() -> SettingsResponse:
+        config = folder.config
+        return SettingsResponse(
+            source=SettingsSource(
+                kind=config.source.kind,
+                protocol=config.source.protocol,
+                host=config.source.host,
+                port=config.source.port,
+                base_path=config.source.base_path,
+                username=config.source.username,
+                password_set=(
+                    config.source.password is not None
+                    or config.source.password_env is not None
+                ),
+                password_env=config.source.password_env,
+                tls=config.source.tls,
+            ),
+            lazy_drafts=config.sync.lazy_drafts,
+            excel=config.paths.excel,
+        )
+
+    @app.get("/api/settings", response_model=SettingsResponse)
+    def get_settings() -> SettingsResponse:
+        return settings_response()
+
+    @app.put("/api/settings", response_model=SettingsResponse)
+    def put_settings(payload: SettingsUpdate) -> SettingsResponse:
+        with settings_lock:
+            data = folder.config_document()
+            source = data.setdefault("source", {})
+            source.update(
+                {
+                    "kind": payload.kind,
+                    "protocol": payload.protocol,
+                    "host": payload.host,
+                    "port": payload.port,
+                    "base_path": payload.base_path,
+                    "tls": payload.tls,
+                }
+            )
+            if payload.username:
+                source["username"] = payload.username
+            else:
+                source.pop("username", None)
+            if payload.clear_password:
+                source.pop("password", None)
+                source.pop("password_env", None)
+            elif payload.password:
+                source["password"] = payload.password
+                source.pop("password_env", None)
+            sync = data.setdefault("sync", {})
+            sync["lazy_drafts"] = payload.lazy_drafts
+            try:
+                folder.update_config(data)
+            except ConfigError as exc:
+                raise HTTPException(
+                    status_code=422, detail=list(exc.errors)
+                ) from None
+        return settings_response()
+
+    @app.post("/api/import/excel", response_model=ExcelImportResponse)
+    async def import_excel(
+        request: Request,
+        filename: str = Query(..., min_length=1),
+        force: bool = Query(True),
+    ) -> ExcelImportResponse:
+        name = Path(filename.replace("\\", "/")).name
+        if name != filename or not name.casefold().endswith((".xlsx", ".xls")):
+            raise HTTPException(
+                status_code=400,
+                detail="filename must be a plain .xlsx or .xls name",
+            )
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(status_code=400, detail="empty workbook")
+        folder.imports_dir.mkdir(parents=True, exist_ok=True)
+        (folder.imports_dir / name).write_bytes(raw)
+        try:
+            result = AgendaIngestor(
+                folder, clock=app.state.clock
+            ).ingest_excel(raw, path=name, force=force)
+        except Exception as exc:  # noqa: BLE001 - report parse errors to UI
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        with settings_lock:
+            data = folder.config_document()
+            data.setdefault("paths", {})["excel"] = name
+            try:
+                folder.update_config(data)
+            except ConfigError as exc:
+                raise HTTPException(
+                    status_code=422, detail=list(exc.errors)
+                ) from None
+        return ExcelImportResponse(
+            status=result.status,
+            path=name,
+            row_count=result.row_count,
+            edge_count=result.edge_count,
+            issue_count=result.issue_count,
         )
 
     @app.get("/api/health", response_model=HealthResponse)
@@ -431,6 +596,14 @@ def create_app(
     def get_discovery() -> list[dict]:
         return with_connection(repository.discovery)
 
+    @app.get("/api/notifications", response_model=list[NotificationItem])
+    def get_notifications(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+        return with_connection(
+            lambda connection: repository.notifications(
+                connection, limit=limit
+            )
+        )
+
     @app.get("/api/sync/status", response_model=SyncStatusResponse)
     def get_sync_status() -> dict:
         return with_connection(
@@ -449,6 +622,38 @@ def create_app(
         if app.state.clock is not None:
             kwargs["clock"] = app.state.clock
         return SyncWorker(folder, **kwargs).run().as_dict()
+
+    @app.post(
+        "/api/tdocs/{tdoc_number}/fetch", response_model=FetchResponse
+    )
+    def fetch_tdoc(
+        tdoc_number: str,
+        lineage: bool = Query(True),
+    ) -> FetchResponse:
+        exists = with_connection(
+            lambda connection: repository.get_tdoc(connection, tdoc_number)
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="tdoc not found")
+        kwargs: dict[str, Any] = {}
+        if app.state.ftp_client is not None:
+            kwargs["client"] = app.state.ftp_client
+        else:
+            kwargs["client"] = LftpFtpClient(folder.config.source)
+        if app.state.clock is not None:
+            kwargs["clock"] = app.state.clock
+        result = Syncer(folder, **kwargs).fetch_for_tdoc(
+            tdoc_number, include_lineage=lineage
+        )
+        return FetchResponse(
+            tdoc_number=tdoc_number,
+            fetched=len(result.fetched),
+            artifacts=list(result.fetched),
+            failures=[
+                f"{failure.path}: {failure.error}"
+                for failure in result.failures
+            ],
+        )
 
     @app.post(
         "/api/tdocs/{tdoc_number}/track", response_model=TrackResponse

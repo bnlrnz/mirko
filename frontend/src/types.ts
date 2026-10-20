@@ -10,6 +10,52 @@ export interface Meeting {
   endpoint: string;
 }
 
+export interface SettingsSource {
+  kind: string;
+  protocol: string;
+  host: string;
+  port: number | null;
+  base_path: string;
+  username: string | null;
+  password_set: boolean;
+  password_env: string | null;
+  tls: string;
+}
+
+export interface Settings {
+  source: SettingsSource;
+  lazy_drafts: boolean;
+  excel: string;
+}
+
+export interface SettingsUpdate {
+  kind: string;
+  protocol: string;
+  host: string;
+  port: number | null;
+  base_path: string;
+  username: string | null;
+  password?: string | null;
+  clear_password?: boolean;
+  tls: string;
+  lazy_drafts: boolean;
+}
+
+export interface FetchResult {
+  tdoc_number: string;
+  fetched: number;
+  artifacts: string[];
+  failures: string[];
+}
+
+export interface ExcelImportResult {
+  status: string;
+  path: string;
+  row_count: number;
+  edge_count: number;
+  issue_count: number;
+}
+
 export interface TdocSummary {
   tdoc_number: string;
   agenda_item: string | null;
@@ -44,6 +90,7 @@ export interface Artifact {
   is_ephemeral: boolean;
   blob_hash: string | null;
   remote_size: number | null;
+  remote_mtime: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
 }
@@ -92,6 +139,18 @@ export interface Assertion {
   superseded_by: number | null;
   observed_at: string;
   detail: unknown;
+}
+
+export interface NotificationItem {
+  kind: string;
+  ref: string;
+  title: string;
+  detail: string | null;
+  tdocs: string[];
+  agenda_item: string | null;
+  created_at: string | null;
+  action: "track" | null;
+  action_ref: string | null;
 }
 
 export type ConflictResolution = "accept_html" | "keep_mine" | "repair";
@@ -155,18 +214,6 @@ export interface Lineage {
   edges: LineageEdge[];
 }
 
-export interface DiscoveryItem {
-  kind: string;
-  ref: string;
-  title: string;
-  detail: string | null;
-  tdocs: string[];
-  agenda_item: string | null;
-  confidence: number;
-  created_at: string | null;
-  action?: "track" | "promote" | null;
-  assertion_id?: number | null;
-}
 
 export interface SyncStatus {
   endpoint: string;

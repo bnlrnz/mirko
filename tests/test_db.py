@@ -61,20 +61,24 @@ def names(connection: sqlite3.Connection, kind: str) -> set[str]:
 
 def test_discover_migrations_is_numbered_and_ordered() -> None:
     migrations = discover_migrations()
-    assert [migration.version for migration in migrations] == [1, 2]
-    assert [migration.name for migration in migrations] == ["initial", "projection_views"]
+    assert [migration.version for migration in migrations] == [1, 2, 3]
+    assert [migration.name for migration in migrations] == [
+        "initial",
+        "projection_views",
+        "lazy_manifest",
+    ]
 
 
 def test_apply_migrations_on_empty_database(tmp_path: Path) -> None:
     connection = connect(tmp_path / "mirko.sqlite", migrate=False)
     try:
         assert schema_version(connection) == 0
-        assert apply_migrations(connection) == [1, 2]
-        assert schema_version(connection) == 2
+        assert apply_migrations(connection) == [1, 2, 3]
+        assert schema_version(connection) == 3
         rows = connection.execute(
             "SELECT version, applied_at FROM schema_migration ORDER BY version"
         ).fetchall()
-        assert [row["version"] for row in rows] == [1, 2]
+        assert [row["version"] for row in rows] == [1, 2, 3]
         assert all(row["applied_at"] for row in rows)
     finally:
         connection.close()
@@ -86,7 +90,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
         assert apply_migrations(connection) == []
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 2
+        ).fetchone()[0] == 3
     finally:
         connection.close()
 
@@ -97,7 +101,7 @@ def test_connect_sets_pragmas_and_schema(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert schema_version(connection) == 2
+        assert schema_version(connection) == 3
     finally:
         connection.close()
 

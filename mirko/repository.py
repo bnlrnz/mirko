@@ -125,6 +125,7 @@ def get_tdoc(connection: sqlite3.Connection, tdoc_number: str) -> dict | None:
             "is_ephemeral": bool(artifact["is_ephemeral"]),
             "blob_hash": artifact["blob_hash"],
             "remote_size": artifact["remote_size"],
+            "remote_mtime": artifact["remote_mtime"],
             "first_seen_at": artifact["first_seen_at"],
             "last_seen_at": artifact["last_seen_at"],
         }
@@ -512,6 +513,166 @@ def discovery(connection: sqlite3.Connection) -> list[dict]:
     return items
 
 
+def _lineage_component(
+    connection: sqlite3.Connection, tdoc_number: str
+) -> set[str]:
+    edges = connection.execute(
+        "SELECT source, target FROM edge_current"
+    ).fetchall()
+    neighbours: dict[str, set[str]] = {}
+    for edge in edges:
+        source = edge["source"]
+        target = edge["target"]
+        neighbours.setdefault(source, set()).add(target)
+        neighbours.setdefault(target, set()).add(source)
+    seen = {tdoc_number}
+    queue = [tdoc_number]
+    while queue:
+        current = queue.pop()
+        for other in neighbours.get(current, ()):
+            if other not in seen:
+                seen.add(other)
+                queue.append(other)
+    placeholders = ", ".join("?" for _ in seen)
+    existing = {
+        row["tdoc_number"]
+        for row in connection.execute(
+            f"SELECT tdoc_number FROM tdoc WHERE tdoc_number IN ({placeholders})",
+            tuple(seen),
+        )
+    }
+    return seen & existing
+
+
+def notifications(
+    connection: sqlite3.Connection, *, limit: int = 100
+) -> list[dict]:
+    tracked = {
+        row["tdoc_number"]: row["added_at"]
+        for row in connection.execute(
+            "SELECT t.tdoc_number, tt.added_at FROM tdoc t "
+            "JOIN tracked_tdoc tt ON tt.tdoc_number = t.tdoc_number "
+            "WHERE t.is_tracked = 1"
+        )
+    }
+    if not tracked:
+        return []
+
+    items: list[dict] = []
+    node_cache: dict[str, sqlite3.Row | None] = {}
+
+    def node(tdoc_number: str):
+        if tdoc_number not in node_cache:
+            node_cache[tdoc_number] = connection.execute(
+                "SELECT tdoc_number, title, agenda_item, decision, "
+                "first_seen_at FROM tdoc WHERE tdoc_number = ?",
+                (tdoc_number,),
+            ).fetchone()
+        return node_cache[tdoc_number]
+
+    seen_links: set[tuple[str, str, str]] = set()
+    for edge in connection.execute(
+        "SELECT source, target, kind, confidence, observed_at "
+        "FROM edge_current ORDER BY observed_at DESC"
+    ):
+        source = edge["source"]
+        target = edge["target"]
+        link_key = (source, target, edge["kind"])
+        if link_key in seen_links:
+            continue
+        seen_links.add(link_key)
+        source_tracked = source in tracked
+        target_tracked = target in tracked
+        if source_tracked == target_tracked:
+            continue
+        tracked_side = source if source_tracked else target
+        other = target if source_tracked else source
+        other_node = node(other)
+        if other_node is None:
+            continue
+        created_at = max(
+            edge["observed_at"] or "",
+            other_node["first_seen_at"] or "",
+        )
+        if created_at < (tracked[tracked_side] or ""):
+            continue
+        items.append(
+            {
+                "kind": "lineage",
+                "ref": f"{source}-{target}-{edge['kind']}",
+                "title": f"New link to {other}",
+                "detail": (
+                    f"{edge['kind']} with tracked {tracked_side} "
+                    f"({round(float(edge['confidence']) * 100)}%)"
+                ),
+                "tdocs": [tracked_side, other],
+                "agenda_item": other_node["agenda_item"],
+                "created_at": created_at,
+                "action": "track",
+                "action_ref": other,
+            }
+        )
+
+    for artifact in connection.execute(
+        "SELECT a.tdoc_number, a.filename, a.logical_path, a.remote_mtime, "
+        "a.kind AS artifact_kind, a.first_seen_at, t.title, t.agenda_item "
+        "FROM artifact a "
+        "JOIN tracked_tdoc tt ON tt.tdoc_number = a.tdoc_number "
+        "JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
+        "WHERE a.kind IN ('working_draft', 'inbox_document') "
+        "AND a.first_seen_at >= tt.added_at "
+        "ORDER BY a.first_seen_at DESC LIMIT ?",
+        (limit,),
+    ):
+        filename = artifact["filename"] or artifact["logical_path"]
+        stamp = artifact["remote_mtime"]
+        items.append(
+            {
+                "kind": "artifact",
+                "ref": artifact["logical_path"],
+                "title": f"New file for {artifact['tdoc_number']}",
+                "detail": f"{filename}" + (f" · FTP {stamp}" if stamp else ""),
+                "tdocs": [artifact["tdoc_number"]],
+                "agenda_item": artifact["agenda_item"],
+                "created_at": artifact["first_seen_at"],
+                "action": None,
+                "action_ref": None,
+            }
+        )
+
+    for assertion in connection.execute(
+        "SELECT a.id, a.subject_ref, a.value, a.source, a.observed_at, "
+        "t.title, t.agenda_item "
+        "FROM assertion a "
+        "JOIN tracked_tdoc tt ON tt.tdoc_number = a.subject_ref "
+        "JOIN tdoc t ON t.tdoc_number = a.subject_ref "
+        "WHERE a.subject_kind = 'tdoc' AND a.predicate = 'decision' "
+        "AND a.active = 1 AND a.muted = 0 AND a.value IS NOT NULL "
+        "AND a.observed_at >= tt.added_at "
+        "ORDER BY a.observed_at DESC LIMIT ?",
+        (limit,),
+    ):
+        items.append(
+            {
+                "kind": "decision",
+                "ref": f"decision-{assertion['id']}",
+                "title": (
+                    f"{assertion['subject_ref']} is now "
+                    f"{assertion['value']}"
+                ),
+                "detail": f"via {assertion['source']}",
+                "tdocs": [assertion["subject_ref"]],
+                "agenda_item": assertion["agenda_item"],
+                "created_at": assertion["observed_at"],
+                "action": None,
+                "action_ref": None,
+            }
+        )
+
+    items.sort(key=lambda item: item["created_at"] or "", reverse=True)
+    return items[:limit]
+
+
 def sync_status(
     connection: sqlite3.Connection,
     *,
@@ -615,22 +776,30 @@ def set_tracked(
     ).fetchone()
     if row is None:
         return None
-    value = 1 if tracked else 0
-    connection.execute(
-        "UPDATE tdoc SET is_tracked = ? WHERE tdoc_number = ?",
-        (value, tdoc_number),
-    )
     if tracked:
+        numbers = _lineage_component(connection, tdoc_number)
+        placeholders = ", ".join("?" for _ in numbers)
         connection.execute(
+            f"UPDATE tdoc SET is_tracked = 1 "
+            f"WHERE tdoc_number IN ({placeholders})",
+            tuple(numbers),
+        )
+        connection.executemany(
             "INSERT INTO tracked_tdoc(tdoc_number, added_by, origin) "
             "VALUES (?, 'user', 'manual') "
             "ON CONFLICT(tdoc_number) DO NOTHING",
+            [(number,) for number in numbers],
+        )
+        value = 1
+    else:
+        connection.execute(
+            "UPDATE tdoc SET is_tracked = 0 WHERE tdoc_number = ?",
             (tdoc_number,),
         )
-    else:
         connection.execute(
             "DELETE FROM tracked_tdoc WHERE tdoc_number = ?", (tdoc_number,)
         )
+        value = 0
     connection.commit()
     return bool(value)
 

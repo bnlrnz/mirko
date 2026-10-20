@@ -3,9 +3,9 @@ import { expect, test } from "@playwright/test";
 import {
   conflicts,
   detail,
-  discovery,
   lineage,
   meeting,
+  notifications,
   sync,
   tdocs,
   timeline,
@@ -28,7 +28,7 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
 
     if (path === "/api/meeting") return json(meeting);
     if (path === "/api/lineage") return json(lineage);
-    if (path === "/api/discovery") return json(discovery);
+    if (path === "/api/notifications") return json(notifications);
     if (path === "/api/conflicts") return json(conflicts);
     if (path === "/api/sync/status") return json(sync);
     if (path === "/api/sync") return json({ status: "ok" });
@@ -85,6 +85,6 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
   await conflictList.getByRole("button", { name: "Keep mine" }).click();
   expect(resolved).toBe(1);
 
-  await page.getByRole("tab", { name: /Discovery/ }).click();
-  await expect(page.getByText("S3-263700 → S3-264999")).toBeVisible();
+  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await expect(page.getByText("New link to S3-264999")).toBeVisible();
 });

@@ -19,6 +19,7 @@ LAYOUT_DIRS = (
     "cache/blobs",
     "cache/mirror",
     "exports",
+    "imports",
     "logs",
 )
 
@@ -49,7 +50,7 @@ def _write_config(path: Path, data: Mapping[str, Any]) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-@dataclass(frozen=True)
+@dataclass
 class MeetingFolder:
     path: Path
     config: MeetingConfig
@@ -95,6 +96,19 @@ class MeetingFolder:
     @property
     def config_path(self) -> Path:
         return self.path / CONFIG_FILENAME
+
+    @property
+    def imports_dir(self) -> Path:
+        return self.path / "imports"
+
+    def config_document(self) -> dict[str, Any]:
+        return json.loads(self.config_path.read_text(encoding="utf-8-sig"))
+
+    def update_config(self, data: Mapping[str, Any]) -> MeetingConfig:
+        validate_config(data)
+        _write_config(self.config_path, data)
+        self.config = load_config(self.config_path)
+        return self.config
 
     @property
     def database_path(self) -> Path:

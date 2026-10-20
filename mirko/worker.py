@@ -34,6 +34,7 @@ class SyncCycleResult:
         return {
             "status": self.status,
             "fetched": self.fetched,
+            "deferred": self.sync.deferred if self.sync is not None else 0,
             "excel": self.excel,
             "agenda": self.agenda,
             "drafts": {

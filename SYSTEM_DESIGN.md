@@ -114,6 +114,7 @@ everything; no absolute paths are stored.
     mirror/<source-relative-path>     # optional relative symlinks for external browsing
     index.json                        # human-readable path→blob snapshot
   exports/
+  imports/                            # workbooks uploaded through the UI
   logs/
 ```
 
@@ -160,6 +161,7 @@ everything; no absolute paths are stored.
     "jitter": 0.2
   },
   "tracked_seed": ["S3-264481", "S3-264388"],
+  "sync": { "lazy_drafts": true },
   "ui": { "default_mode": "auto" }
 }
 ```
@@ -169,7 +171,8 @@ Rules:
 - **Exactly one** active `source` object. Switching endpoints is a deliberate edit
   (UI or file), never an automatic failover.
 - Credentials: literal value or `password_env` indirection. File mode `0600`.
-  Never logged, never exported, never sent to any AI hook.
+  Never logged, never exported, never sent to any AI hook. The settings API returns
+  only `password_set`; it never reads a stored password back to the browser.
 - `tracked_seed` is imported once into the DB; afterwards the tracked set is dynamic
   DB state, not config.
 - `tdoc_series_prefix` expands short hints (`3846` → `S3-263846`) and is never guessed
@@ -292,7 +295,7 @@ Rules:
 
 - HTML **never silently deletes** user intent. A disagreement creates a **conflict**.
 - Filename/email hints never auto-create official links; they render as dashed ghost
-  edges and appear in Discovery, promotable with one click.
+  edges and remain available through `/api/discovery`, promotable with one click.
 - A manual assertion stays active and is re-flagged if later HTML still disagrees.
 - Conflict resolution is **per predicate/subject**, not per node, and never deletes
   notes or artifacts.
@@ -314,10 +317,14 @@ For every cycle:
 
 1. List `Drafts/`, `Inbox/`, and the meeting root (agenda files).
 2. Diff against `remote_entry`.
-3. Fetch new names and names whose `(size, mtime)` changed.
+3. Fetch new names and names whose `(size, mtime)` changed, except when
+   `sync.lazy_drafts` is true: `Drafts/` entries are recorded in the manifest with
+   `fetch_state=pending` and as `status=remote` artifacts, without downloading.
 4. Record an `artifact_observation`; new content becomes a new blob (never overwrite
    an existing blob). This is the **single-download policy**: one fetch per remote
-   identity, and no re-fetch while identity is unchanged.
+   identity, and no re-fetch while identity is unchanged. Deferred artifacts are
+   fetched on demand (detail open, track, or lineage neighbour of a tracked TDoc)
+   and then recorded with their blob hash; agenda HTML and Inbox stay eager.
 5. Ingest agenda: choose the newest `AgendaWithTdocAllocation_*.htm` by filename
    timestamp; fetch only if content hash changed; parse; rebuild projections.
 6. Ingest mail from the local mailbox incrementally (mtime/size + Message-ID).
@@ -629,6 +636,7 @@ Read:
 - `GET /api/artifacts/{id}` (stream)
 - `GET /api/mail?tdoc=&agenda=&q=`
 - `GET /api/discovery`
+- `GET /api/notifications?limit=100`
 - `GET /api/conflicts`
 - `GET /api/sync/status`
 - `GET /api/export/markdown?include_mail=false`
@@ -641,7 +649,9 @@ Write:
 - `POST /api/notes`, `PATCH /api/notes/{id}`, `DELETE /api/notes/{id}`
 - `POST /api/artifacts/{id}/open`
 - `POST /api/sync`
-- `PUT /api/settings/source` (replace the single endpoint)
+- `POST /api/tdocs/{tdoc}/fetch?lineage=true` (download deferred artifacts)
+- `GET|PUT /api/settings` (source, lazy drafts; password write-only)
+- `POST /api/import/excel?filename=...&force=true` (raw workbook body)
 - `POST /api/finalize`
 
 All responses are typed Pydantic models; OpenAPI is generated automatically (the
@@ -653,12 +663,12 @@ future AI contract).
 
 Three-pane desktop layout, responsive enough for a narrow window.
 
-- **Top bar:** meeting selector, search, Sync Now, sync chip (interval/last/next/health).
+- **Top bar:** meeting selector, search, Sync Now, sync chip (interval/last/next/health),
+  Settings panel (FTP source, lazy drafts, workbook upload).
 - **Left rail:** tracked TDocs; filter facets (agenda, type, release, WI, source,
   state); toggle "official only / include ephemeral"; mode switch.
 - **Center:** lineage view (default during meeting) or sortable table (default for
-  prep). Tabs: **Lineage**, **Timeline**, **Conflicts**, **Discovery**,
-  **New numbers**.
+  prep). Tabs: **Lineage**, **Timeline**, **Conflicts**, **Notifications**.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
   notes (with `Support` / `Object` / `Clarify` tags), conflict actions.
 
@@ -669,7 +679,10 @@ Custom SVG lane renderer, not a graph library:
 - lanes are lineage paths (git-log style); nodes are TDocs;
 - `revision_of` = straight continuation; `merged_into` = curved convergence;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;
-- badges: state, tracked, `Avail`, `Treated`, provisional/unconfirmed, conflict;
+- state bubble colors: approved/agreed green, merged/revised light green,
+  noted/postponed yellow, not treated/reserved grey, withdrawn/rejected red;
+- tracked TDocs carry a star; `Avail`, `Treated`, provisional/unconfirmed, and
+  conflict badges remain separate;
 - expand/collapse per tracked set; pan/zoom; keyboard navigation;
 - timeline pane synchronized by selection.
 
@@ -681,7 +694,10 @@ visually distinct.
 
 ### 12.3 Interaction rules
 
-- Adding a tracked TDoc is instant and local.
+- Adding a tracked TDoc is instant and local; tracking expands to every existing
+  TDoc in the active lineage component, while untracking removes only the selected
+  node. New files, decisions, and newly connected nodes surface in Notifications
+  using the tracked timestamp.
 - Manual link creation: "revision of" / "merged into" / "merged from", with source
   badges and an explicit "unverified" state.
 - Conflict resolution: accept HTML, keep mine, or repair; the losing branch is

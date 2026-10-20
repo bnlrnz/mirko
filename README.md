@@ -17,6 +17,7 @@ The authoritative design is [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md); the glossary
   cache/blobs/<sha256>   # authoritative artifact storage (single-download)
   cache/mirror/...       # optional relative symlink view for external browsing
   exports/               # whole-meeting Markdown exports
+  imports/               # workbooks uploaded through the UI
   logs/
 ```
 
@@ -24,7 +25,9 @@ The authoritative design is [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md); the glossary
 
 Python 3.14, FastAPI, SQLite. The sync worker runs serially: remote manifest diff →
 `lftp` fetch → blob cache → Excel/HTML/filename/mail ingestion → assertions and
-conflicts.
+conflicts. Working drafts are deferred by default: only filenames are listed until a
+TDoc is opened or tracked, then its artifacts (and lineage neighbours on track) are
+downloaded on demand. Agenda HTML and Inbox mail remain eager.
 
 - `mirko/config.py`, `meeting_folder.py` — validated config and folder layout.
 - `mirko/migrations/` — schema plus `edge_current` / `tdoc_current` views.
@@ -54,11 +57,20 @@ nix develop -c python -m mirko <meeting-dir> \
 `--import-excel` ingests the workbook, prints the row/edge counts, and exits;
 refresh the UI afterwards. It is safe to run while the server is idle.
 
+The **Settings** panel in the web UI can edit the FTP source, toggle lazy draft
+fetching, and upload the allocation workbook for immediate (forced) parsing. Saves are
+written atomically to `meeting.json` with mode `0600`; credentials are never returned
+by the API.
+
 ## Frontend
 
 React + TypeScript + Vite. Three panes: tracked TDocs/filters, a center view
-(Lineage, Timeline, Conflicts, Discovery, New numbers), and a detail panel with
-metadata, artifacts, mail, notes, assertions, manual links, and conflict actions.
+(Lineage, Timeline, Conflicts, Notifications), and a detail panel with metadata,
+artifacts, mail, notes, assertions, manual links, and conflict actions. Tracking a
+TDoc expands to its connected lineage component; the Notifications tab lists new
+files, decisions, and newly connected nodes for that tracked set. Deferred artifacts
+show as `not fetched` with a fetch button and their FTP upload timestamp; selecting a
+TDoc or tracking it triggers the download automatically.
 
 ```sh
 cd frontend
@@ -74,9 +86,11 @@ Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc
 `/api/tdocs/{tdoc}/timeline`, `/api/lineage`, `/api/mail`, `/api/discovery`,
 `/api/conflicts`, `/api/sync/status`, `/api/export/markdown`, `/api/events` (SSE).
 
-Write: `POST /api/sync`, `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,
+Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
+`POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,
 `PATCH /api/assertions/{id}`, `POST /api/conflicts/{id}/resolve`, `POST /api/notes`,
-`PATCH|DELETE /api/notes/{id}`, `POST /api/finalize`.
+`PATCH|DELETE /api/notes/{id}`, `GET|PUT /api/settings`, `POST /api/import/excel`,
+`POST /api/finalize`.
 
 ## Methodology
 

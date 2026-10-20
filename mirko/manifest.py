@@ -20,6 +20,7 @@ class ManifestEntry:
     first_seen_at: str | None
     last_seen_at: str | None
     missing_since: str | None
+    fetch_state: str = "cached"
 
 
 @dataclass(frozen=True)
@@ -35,11 +36,15 @@ class ManifestDiff:
 
 
 def _identity_changed(existing: ManifestEntry, listed: RemoteEntry) -> bool:
-    if existing.last_blob_hash is None:
-        return True
     if existing.size != listed.size:
         return True
     if existing.mtime and listed.mtime and existing.mtime != listed.mtime:
+        return True
+    if existing.fetch_state == "pending":
+        # The content hash is intentionally unknown for deferred downloads;
+        # matching size/mtime means there is nothing new to record.
+        return False
+    if existing.last_blob_hash is None:
         return True
     return False
 
@@ -87,7 +92,7 @@ class ManifestStore:
         directory = normalize_remote_path(path)
         rows = self.connection.execute(
             "SELECT endpoint_id, path, name, size, mtime, last_blob_hash, "
-            "first_seen_at, last_seen_at, missing_since "
+            "first_seen_at, last_seen_at, missing_since, fetch_state "
             "FROM remote_entry WHERE endpoint_id = ? AND path = ?",
             (self.endpoint_id, directory),
         ).fetchall()
@@ -102,6 +107,7 @@ class ManifestStore:
                 first_seen_at=row["first_seen_at"],
                 last_seen_at=row["last_seen_at"],
                 missing_since=row["missing_since"],
+                fetch_state=row["fetch_state"],
             )
             for row in rows
         }
@@ -116,19 +122,21 @@ class ManifestStore:
         *,
         blob_hash: str | None,
         observed_at: str,
+        fetch_state: str = "cached",
     ) -> None:
         directory = normalize_remote_path(path)
         self.connection.execute(
             "INSERT INTO remote_entry("
             "endpoint_id, path, name, size, mtime, first_seen_at, "
-            "last_seen_at, last_blob_hash, missing_since"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+            "last_seen_at, last_blob_hash, missing_since, fetch_state"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) "
             "ON CONFLICT(endpoint_id, path, name) DO UPDATE SET "
             "size = excluded.size, "
             "mtime = excluded.mtime, "
             "last_seen_at = excluded.last_seen_at, "
             "last_blob_hash = excluded.last_blob_hash, "
-            "missing_since = NULL",
+            "missing_since = NULL, "
+            "fetch_state = excluded.fetch_state",
             (
                 self.endpoint_id,
                 directory,
@@ -138,6 +146,7 @@ class ManifestStore:
                 observed_at,
                 observed_at,
                 blob_hash,
+                fetch_state,
             ),
         )
 

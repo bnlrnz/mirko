@@ -2,11 +2,15 @@ import type {
   Assertion,
   Conflict,
   ConflictResolution,
-  DiscoveryItem,
+  ExcelImportResult,
+  FetchResult,
   Lineage,
   MailSummary,
   Meeting,
   Note,
+  NotificationItem,
+  Settings,
+  SettingsUpdate,
   SyncStatus,
   TdocDetail,
   TdocSummary,
@@ -57,7 +61,7 @@ export const api = {
     request<MailSummary[]>(
       `/api/mail${query(params as Record<string, string | undefined>)}`,
     ),
-  discovery: () => request<DiscoveryItem[]>("/api/discovery"),
+  notifications: () => request<NotificationItem[]>("/api/notifications"),
   conflicts: () => request<Conflict[]>("/api/conflicts"),
   resolveConflict: (id: number, resolution: ConflictResolution, note?: string) =>
     request<Conflict>(`/api/conflicts/${id}/resolve`, {
@@ -104,7 +108,30 @@ export const api = {
       }
     }),
   syncStatus: () => request<SyncStatus>("/api/sync/status"),
-  sync: () => request<{ status: string }>("/api/sync", { method: "POST" }),
+  sync: () => request<{ status: string; deferred?: number }>("/api/sync", {
+    method: "POST",
+  }),
+  settings: () => request<Settings>("/api/settings"),
+  saveSettings: (body: SettingsUpdate) =>
+    request<Settings>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadExcel: (file: File) =>
+    request<ExcelImportResult>(
+      `/api/import/excel${query({ filename: file.name, force: true })}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      },
+    ),
+  fetchTdoc: (tdoc: string, lineage = true) =>
+    request<FetchResult>(
+      `/api/tdocs/${encodeURIComponent(tdoc)}/fetch${query({ lineage })}`,
+      { method: "POST" },
+    ),
   track: (tdoc: string, tracked: boolean) =>
     request<{ tdoc_number: string; is_tracked: boolean }>(
       `/api/tdocs/${encodeURIComponent(tdoc)}/track`,

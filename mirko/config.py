@@ -27,6 +27,7 @@ _ROOT_KEYS = frozenset(
         "mail",
         "paths",
         "poll",
+        "sync",
         "tracked_seed",
         "ui",
     }
@@ -59,6 +60,7 @@ _POLL_KEYS = frozenset(
         "jitter",
     }
 )
+_SYNC_KEYS = frozenset({"lazy_drafts"})
 _UI_KEYS = frozenset({"default_mode"})
 
 _SOURCE_KINDS = frozenset({"local", "remote", "public"})
@@ -165,6 +167,11 @@ class PollSettings:
 
 
 @dataclass(frozen=True)
+class SyncSettings:
+    lazy_drafts: bool = True
+
+
+@dataclass(frozen=True)
 class UiSettings:
     default_mode: str = "auto"
 
@@ -177,6 +184,7 @@ class MeetingConfig:
     mail: MailSettings | None
     paths: PathSettings
     poll: PollSettings
+    sync: SyncSettings
     tracked_seed: tuple[str, ...]
     ui: UiSettings
     warnings: tuple[str, ...] = ()
@@ -282,6 +290,24 @@ def _integer(
         return default
     if maximum is not None and value > maximum:
         issues.error(full, f"must be <= {maximum}")
+        return default
+    return value
+
+
+def _boolean(
+    data: Mapping[str, Any],
+    key: str,
+    path: str,
+    issues: _Issues,
+    *,
+    default: bool,
+) -> bool:
+    full = _join(path, key)
+    value = data.get(key, _MISSING)
+    if value is _MISSING or value is None:
+        return default
+    if not isinstance(value, bool):
+        issues.error(full, "must be true or false")
         return default
     return value
 
@@ -620,6 +646,17 @@ def _validate_tracked_seed(
     return tuple(result)
 
 
+def _validate_sync(
+    data: Mapping[str, Any], issues: _Issues
+) -> SyncSettings:
+    value = _object(data, "sync", "", issues, allowed=_SYNC_KEYS)
+    return SyncSettings(
+        lazy_drafts=_boolean(
+            value, "lazy_drafts", "sync", issues, default=True
+        )
+    )
+
+
 def _validate_ui(data: Mapping[str, Any], issues: _Issues) -> UiSettings:
     value = _object(data, "ui", "", issues, allowed=_UI_KEYS)
     mode = _string(value, "default_mode", "ui", issues, default="auto")
@@ -664,6 +701,7 @@ def _validate(
         mail=_validate_mail(data, issues),
         paths=_validate_paths(data, issues),
         poll=_validate_poll(data, issues),
+        sync=_validate_sync(data, issues),
         tracked_seed=_validate_tracked_seed(data, issues),
         ui=_validate_ui(data, issues),
         warnings=tuple(issues.warnings),
@@ -728,6 +766,7 @@ def load_config(path: str | Path) -> MeetingConfig:
         mail=config.mail,
         paths=config.paths,
         poll=config.poll,
+        sync=config.sync,
         tracked_seed=config.tracked_seed,
         ui=config.ui,
         warnings=config.warnings,

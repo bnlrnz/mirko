@@ -1,41 +1,39 @@
 import type {
   Conflict,
   ConflictResolution,
-  DiscoveryItem,
   Lineage,
+  NotificationItem,
   TimelineEvent,
 } from "../types";
 import { ConflictsView } from "./ConflictsView";
-import { DiscoveryView } from "./DiscoveryView";
 import { LineageView } from "./LineageView";
+import { NotificationsView } from "./NotificationsView";
 import { TimelineView } from "./TimelineView";
 
 export type CenterTab =
   | "lineage"
   | "timeline"
   | "conflicts"
-  | "discovery"
-  | "new";
+  | "notifications";
 
 interface Props {
   tab: CenterTab;
   onTab: (tab: CenterTab) => void;
   lineage: Lineage;
   timeline: TimelineEvent[];
-  discovery: DiscoveryItem[];
+  notifications: NotificationItem[];
   conflicts: Conflict[];
   selected: string | null;
   onSelect: (tdoc: string) => void;
   onResolve: (id: number, resolution: ConflictResolution) => void;
-  onPromote: (item: DiscoveryItem) => void;
+  onTrack: (tdoc: string, tracked: boolean) => void;
 }
 
 const TABS: { id: CenterTab; label: string }[] = [
   { id: "lineage", label: "Lineage" },
   { id: "timeline", label: "Timeline" },
   { id: "conflicts", label: "Conflicts" },
-  { id: "discovery", label: "Discovery" },
-  { id: "new", label: "New numbers" },
+  { id: "notifications", label: "Notifications" },
 ];
 
 export function CenterPane({
@@ -43,12 +41,12 @@ export function CenterPane({
   onTab,
   lineage,
   timeline,
-  discovery,
+  notifications,
   conflicts,
   selected,
   onSelect,
   onResolve,
-  onPromote,
+  onTrack,
 }: Props) {
   return (
     <section className="center-pane">
@@ -66,10 +64,8 @@ export function CenterPane({
             {item.id === "conflicts" && conflicts.length > 0 ? (
               <span className="count">{conflicts.length}</span>
             ) : null}
-            {item.id === "new" ? (
-              <span className="count">
-                {discovery.filter((row) => row.kind === "provisional_tdoc").length}
-              </span>
+            {item.id === "notifications" && notifications.length > 0 ? (
+              <span className="count">{notifications.length}</span>
             ) : null}
           </button>
         ))}
@@ -92,20 +88,11 @@ export function CenterPane({
             onSelect={onSelect}
           />
         ) : null}
-        {tab === "discovery" ? (
-          <DiscoveryView
-            items={discovery}
+        {tab === "notifications" ? (
+          <NotificationsView
+            items={notifications}
             onSelect={onSelect}
-            onPromote={onPromote}
-          />
-        ) : null}
-        {tab === "new" ? (
-          <DiscoveryView
-            items={discovery.filter((row) => row.kind === "provisional_tdoc")}
-            onSelect={onSelect}
-            onPromote={onPromote}
-            emptyTitle="No provisional numbers"
-            emptyBody="Working drafts whose numbers are not in the official agenda appear here."
+            onTrack={(tdoc) => onTrack(tdoc, true)}
           />
         ) : null}
       </div>

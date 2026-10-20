@@ -10,6 +10,7 @@ interface Props {
   onSync: () => void;
   onExport: () => void;
   onFinalize: () => void;
+  onSettings: () => void;
 }
 
 function freshness(value: string | null | undefined): string {
@@ -30,6 +31,7 @@ export function TopBar({
   onSync,
   onExport,
   onFinalize,
+  onSettings,
 }: Props) {
   return (
     <header className="top-bar">
@@ -61,6 +63,9 @@ export function TopBar({
       </button>
       <button type="button" onClick={onFinalize} disabled={busy}>
         Finalize
+      </button>
+      <button type="button" onClick={onSettings}>
+        Settings
       </button>
       {exportPath ? (
         <a className="export-link" href={`/${exportPath}`}>

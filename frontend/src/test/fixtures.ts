@@ -1,9 +1,10 @@
 import type {
   Assertion,
   Conflict,
-  DiscoveryItem,
   Lineage,
   Meeting,
+  NotificationItem,
+  Settings,
   SyncStatus,
   TdocDetail,
   TdocSummary,
@@ -123,6 +124,7 @@ export const detail: TdocDetail = {
       is_ephemeral: true,
       blob_hash: "abc",
       remote_size: 12,
+      remote_mtime: "2026-10-16T09:55:00.000000Z",
       first_seen_at: "2026-10-16T10:00:00.000000Z",
       last_seen_at: "2026-10-16T10:00:00.000000Z",
     },
@@ -232,30 +234,40 @@ export const timeline: TimelineEvent[] = [
   },
 ];
 
-export const discovery: DiscoveryItem[] = [
+
+export const notifications: NotificationItem[] = [
   {
-    kind: "provisional_tdoc",
-    ref: "S3-264999",
-    title: "S3-264999 (provisional)",
-    detail: "draft S3-264999-r1.docx",
-    tdocs: ["S3-264999"],
-    agenda_item: null,
-    confidence: 0.7,
-    created_at: "2026-10-16T10:00:00.000000Z",
+    kind: "lineage",
+    ref: "S3-264202-S3-264999-revision_of",
+    title: "New link to S3-264999",
+    detail: "revision_of with tracked S3-264202 (100%)",
+    tdocs: ["S3-264202", "S3-264999"],
+    agenda_item: "5.3.1.3",
+    created_at: "2026-10-16T12:30:00.000000Z",
     action: "track",
-    assertion_id: null,
+    action_ref: "S3-264999",
   },
   {
-    kind: "filename_hint",
-    ref: "Inbox/Drafts/draft-S3-264999-r1-merger of S3-263700.docx",
-    title: "S3-263700 → S3-264999",
-    detail: '{"hint_kind": "merger_of"}',
-    tdocs: ["S3-263700", "S3-264999"],
-    agenda_item: null,
-    confidence: 0.8,
-    created_at: "2026-10-16T10:00:00.000000Z",
-    action: "promote",
-    assertion_id: 7,
+    kind: "artifact",
+    ref: "Inbox/Drafts/draft S3-264202-r2.docx",
+    title: "New file for S3-264202",
+    detail: "draft S3-264202-r2.docx · FTP 2026-10-16T12:00:00",
+    tdocs: ["S3-264202"],
+    agenda_item: "5.3.1.3",
+    created_at: "2026-10-16T12:20:00.000000Z",
+    action: null,
+    action_ref: null,
+  },
+  {
+    kind: "decision",
+    ref: "S3-264202-2026-10-16T12:10:00",
+    title: "S3-264202 is now agreed",
+    detail: "via html",
+    tdocs: ["S3-264202"],
+    agenda_item: "5.3.1.3",
+    created_at: "2026-10-16T12:10:00.000000Z",
+    action: null,
+    action_ref: null,
   },
 ];
 
@@ -303,4 +315,20 @@ export const sync: SyncStatus = {
   refresh: { drafts: "2026-10-16T12:00:00.000000Z" },
   counts: { tdocs: 2, artifacts: 1, emails: 1, open_conflicts: 0 },
   server_time: "2026-10-16T12:00:10.000000Z",
+};
+
+export const settings: Settings = {
+  source: {
+    kind: "local",
+    protocol: "ftp",
+    host: "10.10.10.10",
+    port: 21,
+    base_path: "/Meetings_3GPP_SYNC/SA3",
+    username: "anonymous",
+    password_set: false,
+    password_env: null,
+    tls: "none",
+  },
+  lazy_drafts: true,
+  excel: "S3-26_meeting_allocation.xlsx",
 };

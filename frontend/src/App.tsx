@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import { CenterPane, type CenterTab } from "./components/CenterPane";
 import { DetailPanel } from "./components/DetailPanel";
 import { LeftRail } from "./components/LeftRail";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { TopBar } from "./components/TopBar";
 import type {
   Conflict,
   ConflictResolution,
-  DiscoveryItem,
   Filters,
   Lineage,
   Meeting,
+  NotificationItem,
+  Settings,
+  SettingsUpdate,
   SyncStatus,
   TdocDetail,
   TdocSummary,
@@ -36,27 +39,37 @@ export default function App() {
   const [detail, setDetail] = useState<TdocDetail | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
-  const [discovery, setDiscovery] = useState<DiscoveryItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [tab, setTab] = useState<CenterTab>("lineage");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [exportPath, setExportPath] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const fetched = useRef(new Set<string>());
 
   const refreshStatic = useCallback(async () => {
     try {
-      const [meetingData, lineageData, discoveryData, syncData, conflictData] =
-        await Promise.all([
-          api.meeting(),
-          api.lineage(filters.tracked),
-          api.discovery(),
-          api.syncStatus(),
-          api.conflicts(),
-        ]);
+      const [
+        meetingData,
+        lineageData,
+        notificationData,
+        syncData,
+        conflictData,
+      ] = await Promise.all([
+        api.meeting(),
+        api.lineage(filters.tracked),
+        api.notifications(),
+        api.syncStatus(),
+        api.conflicts(),
+      ]);
       setMeeting(meetingData);
       setLineage(lineageData);
-      setDiscovery(discoveryData);
+      setNotifications(notificationData);
       setSync(syncData);
       setConflicts(conflictData);
       setError(null);
@@ -124,10 +137,23 @@ export default function App() {
     );
   }, [filters.search, tdocs]);
 
+  const refreshDetail = useCallback(async () => {
+    if (!selected) {
+      return;
+    }
+    const [detailData, events] = await Promise.all([
+      api.tdoc(selected),
+      api.timeline(selected),
+    ]);
+    setDetail(detailData);
+    setTimeline(events);
+  }, [selected]);
+
   const onSync = useCallback(async () => {
     setBusy(true);
     try {
       await api.sync();
+      fetched.current.clear();
       await refreshStatic();
       await refreshTdocs();
       setError(null);
@@ -160,15 +186,22 @@ export default function App() {
     async (tdoc: string, tracked: boolean) => {
       try {
         await api.track(tdoc, tracked);
+        if (tracked) {
+          fetched.current.delete(tdoc);
+          const result = await api.fetchTdoc(tdoc, true);
+          if (result.failures.length > 0) {
+            setError(result.failures.join("; "));
+          }
+        }
         await Promise.all([refreshTdocs(), refreshStatic()]);
         if (selected === tdoc) {
-          setDetail(await api.tdoc(tdoc));
+          await refreshDetail();
         }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refreshStatic, refreshTdocs, selected],
+    [refreshDetail, refreshStatic, refreshTdocs, selected],
   );
 
   const onAddNote = useCallback(
@@ -192,18 +225,6 @@ export default function App() {
     },
     [refreshTdocs, selected],
   );
-
-  const refreshDetail = useCallback(async () => {
-    if (!selected) {
-      return;
-    }
-    const [detailData, events] = await Promise.all([
-      api.tdoc(selected),
-      api.timeline(selected),
-    ]);
-    setDetail(detailData);
-    setTimeline(events);
-  }, [selected]);
 
   const onDeleteNote = useCallback(
     async (noteId: number) => {
@@ -246,23 +267,93 @@ export default function App() {
     [refreshDetail, refreshStatic, refreshTdocs],
   );
 
-  const onPromote = useCallback(
-    async (item: DiscoveryItem) => {
-      try {
-        if (item.action === "track" && item.tdocs[0]) {
-          await api.track(item.tdocs[0], true);
-        } else if (item.action === "promote" && item.assertion_id) {
-          await api.updateAssertion(item.assertion_id, {
-            active: true,
-            muted: false,
-          });
+  const onFetch = useCallback(async () => {
+    if (!selected) {
+      return;
+    }
+    setFetching(true);
+    try {
+      const result = await api.fetchTdoc(selected, false);
+      if (result.failures.length > 0) {
+        setError(result.failures.join("; "));
+      }
+      await refreshDetail();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setFetching(false);
+    }
+  }, [refreshDetail, selected]);
+
+  useEffect(() => {
+    if (!selected || !detail || detail.tdoc_number !== selected) {
+      return;
+    }
+    const missing = detail.artifacts.some(
+      (artifact) =>
+        artifact.blob_hash === null &&
+        (artifact.status === "remote" || artifact.status === "failed"),
+    );
+    if (!missing || fetched.current.has(selected)) {
+      return;
+    }
+    fetched.current.add(selected);
+    setFetching(true);
+    api
+      .fetchTdoc(selected, false)
+      .then(async (result) => {
+        if (result.failures.length > 0) {
+          setError(result.failures.join("; "));
         }
+        if (result.fetched > 0) {
+          await refreshDetail();
+        }
+      })
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      })
+      .finally(() => setFetching(false));
+  }, [detail, refreshDetail, selected]);
+
+  const onSettings = useCallback(async () => {
+    try {
+      setSettings(await api.settings());
+      setSettingsOpen(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
+  const onSaveSettings = useCallback(
+    async (update: SettingsUpdate) => {
+      setSettingsBusy(true);
+      try {
+        const saved = await api.saveSettings(update);
+        setSettings(saved);
+        setMeeting(await api.meeting());
+        setSettingsOpen(false);
         await Promise.all([refreshStatic(), refreshTdocs()]);
+        setError(null);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setSettingsBusy(false);
       }
     },
     [refreshStatic, refreshTdocs],
+  );
+
+  const onUploadExcel = useCallback(
+    async (file: File) => {
+      const result = await api.uploadExcel(file);
+      setSettings(await api.settings());
+      await Promise.all([refreshStatic(), refreshTdocs()]);
+      if (selected) {
+        await refreshDetail();
+      }
+      return `${result.status}: ${result.row_count} rows, ${result.edge_count} edges, ${result.issue_count} issues`;
+    },
+    [refreshDetail, refreshStatic, refreshTdocs, selected],
   );
 
   const selectedConflicts = useMemo(
@@ -282,6 +373,7 @@ export default function App() {
         onSync={onSync}
         onExport={onExport}
         onFinalize={onFinalize}
+        onSettings={onSettings}
       />
       {error ? (
         <div className="error-banner" role="alert">
@@ -302,12 +394,12 @@ export default function App() {
           onTab={setTab}
           lineage={lineage}
           timeline={timeline}
-          discovery={discovery}
+          notifications={notifications}
           conflicts={conflicts}
           selected={selected}
           onSelect={setSelected}
           onResolve={onResolveConflict}
-          onPromote={onPromote}
+          onTrack={onTrack}
         />
         <DetailPanel
           detail={detail}
@@ -319,8 +411,19 @@ export default function App() {
           onAddAssertion={onAddAssertion}
           onResolveConflict={onResolveConflict}
           onSelect={setSelected}
+          onFetch={onFetch}
+          fetching={fetching}
         />
       </main>
+      {settingsOpen && settings ? (
+        <SettingsPanel
+          settings={settings}
+          busy={settingsBusy}
+          onClose={() => setSettingsOpen(false)}
+          onSave={(update) => void onSaveSettings(update)}
+          onUpload={onUploadExcel}
+        />
+      ) : null}
     </div>
   );
 }

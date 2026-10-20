@@ -216,6 +216,7 @@ def test_tdoc_detail_has_related_data(client: TestClient) -> None:
     assert data["has_conflict"] is True
     assert data["notes_count"] == 1
     assert len(data["artifacts"]) == 1
+    assert data["artifacts"][0]["remote_mtime"] == "2026-10-16T14:37:00"
     assert len(data["notes"]) == 1
     assert len(data["emails"]) == 1
     predicates = {item["predicate"] for item in data["assertions"]}

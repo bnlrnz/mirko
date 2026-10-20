@@ -58,6 +58,7 @@ def minimal_config(mbox_path: Path) -> dict:
             "username": "anonymous",
         },
         "mail": {"kind": "mbox", "path": str(mbox_path)},
+        "sync": {"lazy_drafts": False},
     }
 
 

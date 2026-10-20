@@ -30,6 +30,7 @@ def minimal_config() -> dict:
             "base_path": "/Meetings_3GPP_SYNC/SA3",
             "username": "anonymous",
         },
+        "sync": {"lazy_drafts": False},
     }
 
 
