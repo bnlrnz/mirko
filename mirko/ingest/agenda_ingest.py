@@ -189,6 +189,8 @@ class AgendaIngestor:
                 self._reconcile_conflicts(
                     connection, parsed, observed_at=observed_at
                 )
+            else:
+                self._retire_excel_covered_by_html(connection)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -661,6 +663,25 @@ class AgendaIngestor:
             self._retire_excel_assertions(
                 connection, desired, predicates=predicates
             )
+
+    def _retire_excel_covered_by_html(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        """Deactivate prep assertions already superseded by HTML.
+
+        Excel is often imported after the HTML agenda already exists. Keep the
+        HTML assertion as the single active fact and hide the duplicate Excel
+        one from timelines and projections.
+        """
+        connection.execute(
+            "UPDATE assertion AS excel SET active = 0, muted = 1 "
+            "WHERE excel.source = 'excel' AND excel.active = 1 "
+            "AND excel.muted = 0 AND EXISTS ("
+            "SELECT 1 FROM assertion AS html "
+            "WHERE html.source = 'html' AND html.active = 1 "
+            "AND html.muted = 0 AND html.subject_ref = excel.subject_ref "
+            "AND html.predicate = excel.predicate)"
+        )
 
     def _retire_excel_assertions(
         self,

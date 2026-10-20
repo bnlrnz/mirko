@@ -340,3 +340,63 @@ def test_parse_prefers_tdoc_worksheet() -> None:
     result = parse_allocation_excel(buffer.getvalue())
 
     assert [row.tdoc for row in result.rows] == ["S3-264055"]
+
+
+def test_cli_imports_local_workbook(tmp_path: Path) -> None:
+    from mirko.__main__ import main
+
+    meeting = tmp_path / "SA3-130"
+    folder = MeetingFolder.create(meeting, minimal_config())
+    workbook = tmp_path / "TDoc_List_Meeting_SA3#130.xlsx"
+    workbook.write_bytes(workbook_bytes([make_row("S3-264202")]))
+
+    assert main([str(meeting), "--import-excel", str(workbook)]) == 0
+
+    connection = folder.connect()
+    try:
+        tdocs = {
+            row["tdoc_number"]
+            for row in connection.execute("SELECT tdoc_number FROM tdoc")
+        }
+    finally:
+        connection.close()
+    assert tdocs == {"S3-264202"}
+
+
+def test_excel_imported_after_html_does_not_duplicate_facts(
+    tmp_path: Path,
+) -> None:
+    folder = MeetingFolder.create(tmp_path / "SA3-130", minimal_config())
+    ingestor = AgendaIngestor(folder, clock=lambda: NOW)
+    html = (
+        "<table><tr><th>Agenda</th><th>Topic</th><th>TDoc</th><th>Title</th>"
+        "<th>Source</th><th>Type</th><th>For</th><th>Avail</th><th>Treated</th>"
+        "<th>Decision</th><th>Wdrn</th><th>Replaced-by</th><th>Replaces</th></tr>"
+        "<tr><td>5.3</td><td>Topic</td><td>S3-264202</td><td>Title</td>"
+        "<td>Source</td><td>CR</td><td>Approval</td><td>Yes</td><td>No</td>"
+        "<td>revised</td><td>No</td><td></td><td></td></tr></table>"
+    )
+    ingestor.ingest(html)
+
+    ingestor.ingest_excel(
+        workbook_bytes([make_row("S3-264202", decision="revised")])
+    )
+
+    connection = folder.connect()
+    try:
+        active = connection.execute(
+            "SELECT source, COUNT(*) AS count FROM assertion "
+            "WHERE subject_ref = ? AND predicate = 'decision' AND active = 1 "
+            "GROUP BY source",
+            ("S3-264202",),
+        ).fetchall()
+        assert {row["source"]: row["count"] for row in active} == {"html": 1}
+
+        document = connection.execute(
+            "SELECT decision, state_source FROM tdoc WHERE tdoc_number = ?",
+            ("S3-264202",),
+        ).fetchone()
+        assert document["decision"] == "revised"
+        assert document["state_source"] == "html"
+    finally:
+        connection.close()

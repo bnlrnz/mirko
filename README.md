@@ -46,9 +46,13 @@ conflicts.
 nix develop                       # python 3.14, pytest, node 22, playwright browsers
 nix develop -c pytest -q          # backend tests
 nix develop -c python -m mirko <meeting-dir>   # serve API + built frontend
+nix develop -c python -m mirko <meeting-dir> \
+  --import-excel ~/Downloads/TDoc_List_Meeting_SA3#130.xlsx  # seed TDocs early
 ```
 
 `run_server` requires `lftp` and serves `frontend/dist` when it exists.
+`--import-excel` ingests the workbook, prints the row/edge counts, and exits;
+refresh the UI afterwards. It is safe to run while the server is idle.
 
 ## Frontend
 
