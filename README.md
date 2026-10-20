@@ -65,10 +65,15 @@ by the API.
 ## Frontend
 
 React + TypeScript + Vite. Three panes: tracked TDocs/filters, a center view
-(Lineage, Timeline, Conflicts, Notifications), and a detail panel with metadata,
-artifacts, mail, notes, assertions, manual links, and conflict actions. Tracking a
-TDoc expands to its connected lineage component; the Notifications tab lists new
-files, decisions, and newly connected nodes for that tracked set. Deferred artifacts
+(Lineage, Timeline, Conflicts, Notifications, Log), and a detail panel with
+metadata, artifacts, mail, notes, assertions, manual links, and conflict actions.
+Each left-rail TDoc has a tracking star; double-clicking a lineage node toggles
+tracking too. Tracking a TDoc expands to its connected lineage component; the
+Notifications tab lists new files, decisions, and newly connected nodes for that
+tracked set. The Log tab shows persisted tracking and note actions. The Lineage
+graph can show cached working drafts as child nodes via the **Include Drafts**
+filter, renders a post-it badge for the latest note type, and infers LS-in → LS-out
+reply links from matching titles (unverified `based_on` edges). Deferred artifacts
 show as `not fetched` with a fetch button and their FTP upload timestamp; selecting a
 TDoc or tracking it triggers the download automatically.
 
@@ -84,7 +89,8 @@ nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flak
 
 Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc}`,
 `/api/tdocs/{tdoc}/timeline`, `/api/lineage`, `/api/mail`, `/api/discovery`,
-`/api/conflicts`, `/api/sync/status`, `/api/export/markdown`, `/api/events` (SSE).
+`/api/conflicts`, `/api/log`, `/api/sync/status`, `/api/export/markdown`,
+`/api/events` (SSE).
 
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
 `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,

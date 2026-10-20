@@ -9,6 +9,7 @@ import type {
   TdocDetail,
   TdocSummary,
   TimelineEvent,
+  UserAction,
 } from "../types";
 
 export const meeting: Meeting = {
@@ -86,6 +87,7 @@ export const lineage: Lineage = {
       is_tracked: true,
       is_provisional: false,
       first_seen_at: "2026-10-16T10:00:00.000000Z",
+      note_badge: "Support",
     },
     {
       tdoc_number: "S3-264203",
@@ -110,6 +112,25 @@ export const lineage: Lineage = {
     },
   ],
 };
+
+export const userActions: UserAction[] = [
+  {
+    id: 2,
+    action: "note_created",
+    target_kind: "tdoc",
+    target_ref: "S3-264202",
+    detail: "[Support] Support this CR.",
+    created_at: "2026-10-16T13:00:00.000000Z",
+  },
+  {
+    id: 1,
+    action: "track",
+    target_kind: "tdoc",
+    target_ref: "S3-264202",
+    detail: null,
+    created_at: "2026-10-16T12:30:00.000000Z",
+  },
+];
 
 export const detail: TdocDetail = {
   ...tdocs[0],

@@ -15,6 +15,7 @@ import type {
   TdocDetail,
   TdocSummary,
   TimelineEvent,
+  UserAction,
 } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -50,11 +51,16 @@ export const api = {
     request<TimelineEvent[]>(
       `/api/tdocs/${encodeURIComponent(tdoc)}/timeline`,
     ),
-  lineage: (trackedOnly: boolean, includeInactive = true) =>
+  lineage: (
+    trackedOnly: boolean,
+    includeInactive = false,
+    includeDrafts = true,
+  ) =>
     request<Lineage>(
       `/api/lineage${query({
         tracked: trackedOnly,
         include_inactive: includeInactive,
+        include_drafts: includeDrafts,
       })}`,
     ),
   mail: (params: Record<string, string | number | undefined> = {}) =>
@@ -62,6 +68,7 @@ export const api = {
       `/api/mail${query(params as Record<string, string | undefined>)}`,
     ),
   notifications: () => request<NotificationItem[]>("/api/notifications"),
+  log: () => request<UserAction[]>("/api/log"),
   conflicts: () => request<Conflict[]>("/api/conflicts"),
   resolveConflict: (id: number, resolution: ConflictResolution, note?: string) =>
     request<Conflict>(`/api/conflicts/${id}/resolve`, {

@@ -141,6 +141,15 @@ export interface Assertion {
   detail: unknown;
 }
 
+export interface UserAction {
+  id: number;
+  action: string;
+  target_kind: string | null;
+  target_ref: string | null;
+  detail: string | null;
+  created_at: string | null;
+}
+
 export interface NotificationItem {
   kind: string;
   ref: string;
@@ -196,6 +205,13 @@ export interface LineageNode {
   is_tracked: boolean;
   is_provisional: boolean;
   first_seen_at: string | null;
+  note_badge?: string | null;
+  node_kind?: "tdoc" | "draft";
+  attached_to?: string | null;
+  artifact_id?: number | null;
+  logical_path?: string | null;
+  status?: string | null;
+  remote_mtime?: string | null;
 }
 
 export interface LineageEdge {

@@ -138,7 +138,13 @@ class RealSnapshotRegressionTests(unittest.TestCase):
         kinds = Counter(edge.kind for edge in self.result.edges)
         self.assertEqual(kinds["revision_of"], 186)
         self.assertEqual(kinds["merged_into"], 228)
-        self.assertEqual(kinds["based_on"], 12)
+        self.assertEqual(kinds["based_on"], 28)
+
+    def test_ls_reply_links(self) -> None:
+        edges = {(edge.source, edge.kind, edge.target) for edge in self.result.edges}
+        self.assertIn(("S3-264191", "based_on", "S3-264341"), edges)
+        self.assertIn(("S3-264202", "based_on", "S3-264406"), edges)
+        self.assertIn(("S3-264212", "based_on", "S3-264466"), edges)
 
     def test_only_known_issue_kinds(self) -> None:
         self.assertEqual(

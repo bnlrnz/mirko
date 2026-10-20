@@ -348,6 +348,7 @@ def lineage(
     *,
     tracked_only: bool = False,
     include_inactive: bool = False,
+    include_drafts: bool = False,
 ) -> dict:
     if include_inactive:
         edge_sql = (
@@ -370,7 +371,7 @@ def lineage(
             "SELECT tdoc_number FROM tdoc WHERE is_tracked = 1"
         )
     }
-    if tracked_only and tracked:
+    if tracked_only:
         edges = [
             dict(row)
             for row in connection.execute(edge_sql)
@@ -391,10 +392,18 @@ def lineage(
     if node_ids:
         placeholders = ", ".join("?" for _ in node_ids)
         rows = connection.execute(
-            "SELECT tdoc_number, title, decision, state_source, agenda_item, "
-            "type, is_tracked, is_provisional, first_seen_at "
-            f"FROM tdoc WHERE tdoc_number IN ({placeholders}) "
-            "ORDER BY COALESCE(agenda_item, ''), tdoc_number",
+            "SELECT t.tdoc_number, t.title, t.decision, t.state_source, "
+            "t.agenda_item, t.type, t.is_tracked, t.is_provisional, "
+            "t.first_seen_at, "
+            "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'tdoc' "
+            "AND n.target_ref = t.tdoc_number) AS notes_count, "
+            "(SELECT n.position_tag FROM note n WHERE n.target_kind = 'tdoc' "
+            "AND n.target_ref = t.tdoc_number AND n.position_tag IS NOT NULL "
+            "ORDER BY n.created_at DESC, n.id DESC LIMIT 1) AS note_tag "
+            "FROM tdoc t WHERE t.tdoc_number IN ({placeholders}) "
+            "ORDER BY COALESCE(t.agenda_item, ''), t.tdoc_number".format(
+                placeholders=placeholders
+            ),
             tuple(node_ids),
         )
         nodes = [
@@ -408,9 +417,60 @@ def lineage(
                 "is_tracked": bool(row["is_tracked"]),
                 "is_provisional": bool(row["is_provisional"]),
                 "first_seen_at": row["first_seen_at"],
+                "note_badge": row["note_tag"]
+                or ("note" if row["notes_count"] else None),
             }
             for row in rows
         ]
+    existing_ids = {node["tdoc_number"] for node in nodes}
+    edges = [
+        edge
+        for edge in edges
+        if edge["source"] in existing_ids and edge["target"] in existing_ids
+    ]
+    if include_drafts and existing_ids:
+        drafts = connection.execute(
+            "SELECT a.id, a.tdoc_number, a.filename, a.logical_path, a.status, "
+            "a.first_seen_at, a.remote_mtime, t.agenda_item, t.is_tracked "
+            "FROM artifact a JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
+            "WHERE a.kind = 'working_draft' "
+            "ORDER BY a.tdoc_number, a.first_seen_at, a.id"
+        )
+        for draft in drafts:
+            if draft["tdoc_number"] not in existing_ids:
+                continue
+            node_id = f"draft:{draft['id']}"
+            nodes.append(
+                {
+                    "tdoc_number": node_id,
+                    "title": draft["filename"] or draft["logical_path"],
+                    "decision": draft["status"],
+                    "state_source": "artifact",
+                    "agenda_item": draft["agenda_item"],
+                    "type": "working draft",
+                    "is_tracked": bool(draft["is_tracked"]),
+                    "is_provisional": False,
+                    "first_seen_at": draft["first_seen_at"],
+                    "node_kind": "draft",
+                    "attached_to": draft["tdoc_number"],
+                    "artifact_id": int(draft["id"]),
+                    "logical_path": draft["logical_path"],
+                    "status": draft["status"],
+                    "remote_mtime": draft["remote_mtime"],
+                }
+            )
+            edges.append(
+                {
+                    "source": draft["tdoc_number"],
+                    "target": node_id,
+                    "kind": "has_draft",
+                    "source_ref": None,
+                    "confidence": 1.0,
+                    "verified": True,
+                    "active": True,
+                    "muted": False,
+                }
+            )
     return {"nodes": nodes, "edges": edges}
 
 
@@ -768,6 +828,32 @@ def _count(
     return int(connection.execute(sql).fetchone()[0])
 
 
+def _record_action(
+    connection: sqlite3.Connection,
+    action: str,
+    *,
+    target_kind: str | None = None,
+    target_ref: str | None = None,
+    detail: str | None = None,
+) -> None:
+    connection.execute(
+        "INSERT INTO user_action(action, target_kind, target_ref, detail) "
+        "VALUES (?, ?, ?, ?)",
+        (action, target_kind, target_ref, detail),
+    )
+
+
+def user_actions(
+    connection: sqlite3.Connection, *, limit: int = 100
+) -> list[dict]:
+    rows = connection.execute(
+        "SELECT id, action, target_kind, target_ref, detail, created_at "
+        "FROM user_action ORDER BY created_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def set_tracked(
     connection: sqlite3.Connection, tdoc_number: str, tracked: bool
 ) -> bool | None:
@@ -800,6 +886,12 @@ def set_tracked(
             "DELETE FROM tracked_tdoc WHERE tdoc_number = ?", (tdoc_number,)
         )
         value = 0
+    _record_action(
+        connection,
+        "track" if tracked else "untrack",
+        target_kind="tdoc",
+        target_ref=tdoc_number,
+    )
     connection.commit()
     return bool(value)
 
@@ -818,6 +910,13 @@ def add_note(
         "INSERT INTO note(target_kind, target_ref, body, position_tag, author, "
         "source) VALUES (?, ?, ?, ?, ?, ?)",
         (target_kind, target_ref, body, position_tag, author, source),
+    )
+    _record_action(
+        connection,
+        "note_created",
+        target_kind=target_kind,
+        target_ref=target_ref,
+        detail=f"[{position_tag}] {body}" if position_tag else body,
     )
     connection.commit()
     row = connection.execute(
@@ -1175,6 +1274,20 @@ def update_note(
         connection.execute(
             f"UPDATE note SET {', '.join(sets)} WHERE id = ?", params
         )
+        updated = connection.execute(
+            "SELECT * FROM note WHERE id = ?", (note_id,)
+        ).fetchone()
+        _record_action(
+            connection,
+            "note_updated",
+            target_kind=updated["target_kind"],
+            target_ref=updated["target_ref"],
+            detail=(
+                f"[{updated['position_tag']}] {updated['body']}"
+                if updated["position_tag"]
+                else updated["body"]
+            ),
+        )
         connection.commit()
         row = connection.execute(
             "SELECT * FROM note WHERE id = ?", (note_id,)
@@ -1183,6 +1296,18 @@ def update_note(
 
 
 def delete_note(connection: sqlite3.Connection, note_id: int) -> bool:
+    row = connection.execute(
+        "SELECT target_kind, target_ref, body FROM note WHERE id = ?",
+        (note_id,),
+    ).fetchone()
     cursor = connection.execute("DELETE FROM note WHERE id = ?", (note_id,))
+    if cursor.rowcount > 0 and row is not None:
+        _record_action(
+            connection,
+            "note_deleted",
+            target_kind=row["target_kind"],
+            target_ref=row["target_ref"],
+            detail=row["body"],
+        )
     connection.commit()
     return cursor.rowcount > 0

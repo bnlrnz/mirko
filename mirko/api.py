@@ -164,6 +164,13 @@ class LineageNode(BaseModel):
     is_tracked: bool = False
     is_provisional: bool = False
     first_seen_at: str | None = None
+    note_badge: str | None = None
+    node_kind: str = "tdoc"
+    attached_to: str | None = None
+    artifact_id: int | None = None
+    logical_path: str | None = None
+    status: str | None = None
+    remote_mtime: str | None = None
 
 
 class LineageEdge(BaseModel):
@@ -190,6 +197,15 @@ class DiscoveryItem(BaseModel):
     tdocs: list[str] = []
     agenda_item: str | None = None
     confidence: float = 0.0
+    created_at: str | None = None
+
+
+class UserActionItem(BaseModel):
+    id: int
+    action: str
+    target_kind: str | None = None
+    target_ref: str | None = None
+    detail: str | None = None
     created_at: str | None = None
 
 
@@ -569,13 +585,16 @@ def create_app(
 
     @app.get("/api/lineage", response_model=LineageResponse)
     def get_lineage(
-        tracked: bool = False, include_inactive: bool = False
+        tracked: bool = False,
+        include_inactive: bool = False,
+        include_drafts: bool = False,
     ) -> dict:
         return with_connection(
             lambda connection: repository.lineage(
                 connection,
                 tracked_only=tracked,
                 include_inactive=include_inactive,
+                include_drafts=include_drafts,
             )
         )
 
@@ -590,6 +609,12 @@ def create_app(
             lambda connection: repository.list_mail(
                 connection, tdoc=tdoc, agenda=agenda, query=q, limit=limit
             )
+        )
+
+    @app.get("/api/log", response_model=list[UserActionItem])
+    def get_log(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+        return with_connection(
+            lambda connection: repository.user_actions(connection, limit=limit)
         )
 
     @app.get("/api/discovery", response_model=list[DiscoveryItem])

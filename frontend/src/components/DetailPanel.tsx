@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { Conflict, ConflictResolution, TdocDetail } from "../types";
 
 interface Props {
   detail: TdocDetail | null;
+  endpoint: string | null;
   includeEphemeral: boolean;
   conflicts: Conflict[];
   onTrack: (tdoc: string, tracked: boolean) => void;
@@ -14,6 +15,35 @@ interface Props {
   onSelect: (tdoc: string) => void;
   onFetch: () => void;
   fetching: boolean;
+  highlightArtifactId: number | null;
+  onClearArtifactHighlight: () => void;
+}
+
+export function artifactUrl(
+  endpoint: string | null,
+  logicalPath: string,
+): string | null {
+  if (!endpoint) {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return null;
+  }
+  const base = url.pathname.replace(/\/+$/, "");
+  const prefix = base.startsWith("/ftp") ? "" : "/ftp";
+  const path = logicalPath
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  const host =
+    url.hostname.toLowerCase() === "ftp.3gpp.org"
+      ? "www.3gpp.org"
+      : url.hostname;
+  return `https://${host}${prefix}${base}/${path}`;
 }
 
 function value(value: string | number | boolean | null | undefined): string {
@@ -25,6 +55,7 @@ function value(value: string | number | boolean | null | undefined): string {
 
 export function DetailPanel({
   detail,
+  endpoint,
   includeEphemeral,
   conflicts,
   onTrack,
@@ -35,11 +66,32 @@ export function DetailPanel({
   onSelect,
   onFetch,
   fetching,
+  highlightArtifactId,
+  onClearArtifactHighlight,
 }: Props) {
   const [note, setNote] = useState("");
   const [position, setPosition] = useState("");
   const [predicate, setPredicate] = useState("revision_of");
   const [linkTarget, setLinkTarget] = useState("");
+
+  const highlightedArtifactVisible =
+    highlightArtifactId !== null &&
+    (detail?.artifacts.some(
+      (artifact) => artifact.id === highlightArtifactId,
+    ) ??
+      false);
+
+  useEffect(() => {
+    if (!highlightedArtifactVisible) {
+      return;
+    }
+    const timer = window.setTimeout(onClearArtifactHighlight, 2000);
+    return () => window.clearTimeout(timer);
+  }, [
+    highlightArtifactId,
+    highlightedArtifactVisible,
+    onClearArtifactHighlight,
+  ]);
 
   if (!detail) {
     return (
@@ -128,22 +180,45 @@ export function DetailPanel({
           <p className="empty">No cached artifacts.</p>
         ) : (
           <ul className="artifact-list">
-            {artifacts.map((artifact) => (
-              <li key={artifact.id}>
-                <span className={`badge kind-${artifact.kind}`}>{artifact.kind}</span>
-                <span>{artifact.filename ?? artifact.logical_path}</span>
-                <small>
-                  {artifact.status === "remote"
-                    ? "not fetched"
-                    : artifact.status}
-                  {artifact.is_ephemeral ? " · ephemeral" : ""}
-                  {artifact.remote_size ? ` · ${artifact.remote_size} B` : ""}
-                  {artifact.remote_mtime
-                    ? ` · FTP uploaded ${artifact.remote_mtime}`
-                    : ""}
-                </small>
-              </li>
-            ))}
+            {artifacts.map((artifact) => {
+              const href = artifactUrl(endpoint, artifact.logical_path);
+              const name = artifact.filename ?? artifact.logical_path;
+              return (
+                <li key={artifact.id}>
+                  <span className={`badge kind-${artifact.kind}`}>
+                    {artifact.kind}
+                  </span>
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={
+                        artifact.id === highlightArtifactId
+                          ? "artifact-highlight"
+                          : undefined
+                      }
+                    >
+                      {name}
+                    </a>
+                  ) : (
+                    <span>{name}</span>
+                  )}
+                  <small>
+                    {artifact.status === "remote"
+                      ? "not fetched"
+                      : artifact.status}
+                    {artifact.is_ephemeral ? " · ephemeral" : ""}
+                    {artifact.remote_size
+                      ? ` · ${artifact.remote_size} B`
+                      : ""}
+                    {artifact.remote_mtime
+                      ? ` · FTP uploaded ${artifact.remote_mtime}`
+                      : ""}
+                  </small>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

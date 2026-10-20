@@ -204,9 +204,12 @@ Terminology is defined in `GLOSSARY.md`. This section is the structural model.
 1. **Inter-TDoc (official) lineage** — nodes are **TDocs** (`S3-26XXXX`). Edges:
    - `revision_of` — one source, produced by a revision; the source is the baseline.
    - `merged_into` — one of several sources of a merge; the non-baseline sources.
-   - `based_on` — weak/standalone `Replaces` relationship without a confirmed merge group.
+   - `based_on` — weak/standalone `Replaces` relationship without a confirmed merge
+     group, or an inferred LS-in → LS-out reply link (title match, unverified).
 2. **Intra-TDoc events** — artifacts attached to one TDoc: initial submission,
    working drafts (`-rN`), emails, Inbox ZIP, meeting notes. Ephemeral but kept locally.
+   The lineage renderer can show cached working drafts as dashed child nodes of
+   their TDoc; this is visualization only, not a new TDoc identity.
 
 A TDoc is the stable identity. A **working draft is not a new TDoc**; an official
 revision **is** a new TDoc number.
@@ -510,6 +513,7 @@ conflict(id, predicate, subject_ref, assertion_ids JSON, status, resolution,
          created_at, resolved_at)
 note(id, target_kind, target_ref, body, position_tag, author, source,
      created_at, updated_at)
+user_action(id, action, target_kind, target_ref, detail, created_at)
 email(id, message_id PK, thread_id, subject, from_addr, to_addrs, cc_addrs,
       date_utc, agenda_item, meeting_id, body_blob_hash, raw_blob_hash,
       ingested_at, inference JSON)
@@ -632,11 +636,12 @@ Read:
 - `GET /api/tdocs?agenda=&type=&release=&wi=&source=&state=&tracked=`
 - `GET /api/tdocs/{tdoc}`
 - `GET /api/tdocs/{tdoc}/timeline`
-- `GET /api/lineage?tracked=true`
+- `GET /api/lineage?tracked=true&include_drafts=true`
 - `GET /api/artifacts/{id}` (stream)
 - `GET /api/mail?tdoc=&agenda=&q=`
 - `GET /api/discovery`
 - `GET /api/notifications?limit=100`
+- `GET /api/log?limit=100`
 - `GET /api/conflicts`
 - `GET /api/sync/status`
 - `GET /api/export/markdown?include_mail=false`
@@ -663,12 +668,12 @@ future AI contract).
 
 Three-pane desktop layout, responsive enough for a narrow window.
 
-- **Top bar:** meeting selector, search, Sync Now, sync chip (interval/last/next/health),
+- **Top bar:** meeting selector, Sync Now, sync chip (interval/last/next/health),
   Settings panel (FTP source, lazy drafts, workbook upload).
-- **Left rail:** tracked TDocs; filter facets (agenda, type, release, WI, source,
-  state); toggle "official only / include ephemeral"; mode switch.
+- **Left rail:** tracked TDocs and search; a per-row tracking star; filter facets
+  (agenda, type, release, WI, source, state); **Include Drafts**; mode switch.
 - **Center:** lineage view (default during meeting) or sortable table (default for
-  prep). Tabs: **Lineage**, **Timeline**, **Conflicts**, **Notifications**.
+  prep). Tabs: **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
   notes (with `Support` / `Object` / `Clarify` tags), conflict actions.
 
@@ -676,14 +681,23 @@ Three-pane desktop layout, responsive enough for a narrow window.
 
 Custom SVG lane renderer, not a graph library:
 
-- lanes are lineage paths (git-log style); nodes are TDocs;
+- lanes are lineage paths (git-log style); nodes are TDocs, with optional working
+  drafts behind the **Include Drafts** filter, ordered by upload time and chained
+  ahead of the TDoc's official revision; clicking a draft opens its TDoc and
+  briefly highlights the matching artifact link;
 - `revision_of` = straight continuation; `merged_into` = curved convergence;
+  `has_draft` = dotted child edge; `based_on` = dashed weak/inferred link;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;
-- state bubble colors: approved/agreed green, merged/revised light green,
-  noted/postponed yellow, not treated/reserved grey, withdrawn/rejected red;
-- tracked TDocs carry a star; `Avail`, `Treated`, provisional/unconfirmed, and
-  conflict badges remain separate;
-- expand/collapse per tracked set; pan/zoom; keyboard navigation;
+- state bubble colors: approved/agreed/replied-to green, merged/revised light
+  green-grey, noted/postponed yellow, not treated/reserved grey,
+  withdrawn/rejected red;
+- tracked TDocs carry a star; a post-it badge shows the latest note type (plain
+  note, red `×` Object, green `✓` Support, blue `?` Clarify); `Avail`, `Treated`,
+  provisional/unconfirmed, and conflict badges remain separate;
+- expand/collapse per tracked set; click-drag on the background pans in all
+  directions with inertia (a click stops the fling); nodes remain clickable;
+  zoom controls; double-clicking a TDoc in the left list centers the graph on its
+  node; double-clicking a lineage node toggles tracking; keyboard navigation;
 - timeline pane synchronized by selection.
 
 ### 12.2 Timeline
@@ -697,7 +711,8 @@ visually distinct.
 - Adding a tracked TDoc is instant and local; tracking expands to every existing
   TDoc in the active lineage component, while untracking removes only the selected
   node. New files, decisions, and newly connected nodes surface in Notifications
-  using the tracked timestamp.
+  using the tracked timestamp. Tracking changes and note actions are recorded in
+  `user_action` and shown in the Log tab.
 - Manual link creation: "revision of" / "merged into" / "merged from", with source
   badges and an explicit "unverified" state.
 - Conflict resolution: accept HTML, keep mine, or repair; the losing branch is
@@ -831,7 +846,7 @@ AI is deferred, but the seams are kept:
 
 1. ~~Raw HTML not yet captured.~~ **Resolved.** A raw snapshot is parsed and
    regression-tested by `mirko/ingest/agenda_html.py` and
-   `tests/test_agenda_html.py` (900 rows, 51 treated notes, 426 lineage edges,
+   `tests/test_agenda_html.py` (900 rows, 51 treated notes, 442 lineage edges,
    3 flagged data anomalies). The file uses empty continuation cells, not
    `rowspan`; TDoc hyphens arrive as `&#x2011;`, and `Treated` notes live in
    `span.tooltiptext`.

@@ -41,6 +41,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
+from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
@@ -446,6 +447,102 @@ def _parse_treated(cell: _Cell) -> tuple[bool | None, str | None]:
 # ---------------------------------------------------------------------------
 
 
+_LS_TITLE_PREFIX = re.compile(
+    r"^(?:\[?draft\]?\s*)?"
+    r"(?:reply(?:\s+(?:ls|to))?\s*[:\-]?\s*)?"
+    r"(?:ls(?:\s+(?:in|out|reply))?\s*)?",
+    re.IGNORECASE,
+)
+_LS_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "the",
+        "on",
+        "of",
+        "for",
+        "to",
+        "in",
+        "ls",
+        "out",
+        "reply",
+        "draft",
+        "re",
+        "cc",
+        "contact",
+        "from",
+        "3gpp",
+        "new",
+    }
+)
+
+
+def _ls_title_tokens(title: str) -> set[str]:
+    text = _LS_TITLE_PREFIX.sub("", normalize_text(title)).casefold()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return {
+        token
+        for token in text.split()
+        if token not in _LS_STOPWORDS and len(token) > 1
+    }
+
+
+def _ls_similarity(left: str, right: str) -> float:
+    left_tokens = _ls_title_tokens(left)
+    right_tokens = _ls_title_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    jaccard = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    sequence = SequenceMatcher(
+        None,
+        " ".join(sorted(left_tokens)),
+        " ".join(sorted(right_tokens)),
+    ).ratio()
+    return 0.5 * jaccard + 0.5 * sequence
+
+
+def derive_ls_edges(rows: Iterable[AgendaRow]) -> list[LineageEdge]:
+    """Link LS-out rows to the LS-in row named by their title.
+
+    The agenda has no reply column: an LS out only repeats (part of) the
+    incoming LS title, often with ``Reply``/``draft`` prefixes. Use a
+    conservative title-similarity threshold and require a clear best match.
+    """
+    rows = list(rows)
+    incoming = [row for row in rows if row.type == "LS in"]
+    outgoing = [row for row in rows if row.type == "LS out"]
+    if not incoming or not outgoing:
+        return []
+
+    edges: list[LineageEdge] = []
+    for out_row in outgoing:
+        scored = sorted(
+            (
+                (_ls_similarity(in_row.title, out_row.title), in_row)
+                for in_row in incoming
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if not scored or scored[0][0] < 0.45:
+            continue
+        if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.1:
+            continue
+        score, in_row = scored[0]
+        edges.append(
+            LineageEdge(
+                in_row.tdoc,
+                out_row.tdoc,
+                "based_on",
+                round(score, 2),
+                False,
+                "LS title match",
+            )
+        )
+    return edges
+
+
 def derive_lineage(
     rows: Iterable[AgendaRow],
 ) -> tuple[list[LineageEdge], list[LineageIssue]]:
@@ -579,6 +676,9 @@ def derive_lineage(
                 "Replaces without reverse link",
             )
         )
+
+    for edge in derive_ls_edges(rows):
+        add(edge)
 
     # Consistency checks.
     for row in rows:

@@ -7,6 +7,8 @@ interface Props {
   selected: string | null;
   onFilters: (filters: Filters) => void;
   onSelect: (tdoc: string) => void;
+  onFocusTdoc: (tdoc: string) => void;
+  onTrack: (tdoc: string, tracked: boolean) => void;
 }
 
 function unique(values: (string | null)[]): string[] {
@@ -20,6 +22,8 @@ export function LeftRail({
   selected,
   onFilters,
   onSelect,
+  onFocusTdoc,
+  onTrack,
 }: Props) {
   const agendas = unique(allTdocs.map((row) => row.agenda_item));
   const types = unique(allTdocs.map((row) => row.type));
@@ -31,6 +35,16 @@ export function LeftRail({
 
   return (
     <aside className="left-rail" aria-label="Tracked TDocs and filters">
+      <div className="rail-search">
+        <input
+          className="search"
+          type="search"
+          aria-label="Search TDocs"
+          placeholder="Search TDocs…"
+          value={filters.search}
+          onChange={(event) => set("search", event.target.value)}
+        />
+      </div>
       <section className="facet-panel">
         <h2>Filters</h2>
         <label>
@@ -99,7 +113,7 @@ export function LeftRail({
             checked={filters.includeEphemeral}
             onChange={(event) => set("includeEphemeral", event.target.checked)}
           />
-          Include ephemeral
+          Include Drafts
         </label>
       </section>
 
@@ -112,17 +126,19 @@ export function LeftRail({
         ) : (
           <ul>
             {tdocs.map((row) => (
-              <li key={row.tdoc_number}>
+              <li key={row.tdoc_number} className="tdoc-row">
                 <button
                   type="button"
-                  className={selected === row.tdoc_number ? "selected" : ""}
+                  className={`tdoc-select${
+                    selected === row.tdoc_number ? " selected" : ""
+                  }`}
                   aria-current={selected === row.tdoc_number || undefined}
                   onClick={() => onSelect(row.tdoc_number)}
+                  onDoubleClick={() => onFocusTdoc(row.tdoc_number)}
                 >
                   <span className="tdoc-number">{row.tdoc_number}</span>
                   <span className="tdoc-title">{row.title ?? row.topic}</span>
                   <span className="badges">
-                    {row.is_tracked ? <em className="badge tracked">★</em> : null}
                     {row.is_provisional ? (
                       <em className="badge provisional">new</em>
                     ) : null}
@@ -136,6 +152,18 @@ export function LeftRail({
                       <em className="badge">{row.mention_count} mail</em>
                     ) : null}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className={`track-toggle${row.is_tracked ? " tracked" : ""}`}
+                  aria-label={`${row.is_tracked ? "Untrack" : "Track"} ${
+                    row.tdoc_number
+                  }`}
+                  aria-pressed={row.is_tracked}
+                  title={row.is_tracked ? "Untrack TDoc" : "Track TDoc"}
+                  onClick={() => onTrack(row.tdoc_number, !row.is_tracked)}
+                >
+                  {row.is_tracked ? "★" : "☆"}
                 </button>
               </li>
             ))}

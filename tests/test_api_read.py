@@ -224,6 +224,32 @@ def test_tdoc_detail_has_related_data(client: TestClient) -> None:
     assert client.get("/api/tdocs/S3-999999").status_code == 404
 
 
+def test_lineage_drops_edges_to_missing_tdocs(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    connection = seeded_folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO assertion(subject_kind, subject_ref, predicate, "
+            "object_kind, object_ref, source, confidence, verified, active, "
+            "muted, observed_at) VALUES "
+            "('tdoc', 'S3-264202', 'revision_of', 'tdoc', 'S3-999999', "
+            "'user', 1.0, 1, 1, 0, '2026-10-16T13:00:00.000000Z')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    data = client.get("/api/lineage", params={"tracked": "true"}).json()
+    node_ids = {node["tdoc_number"] for node in data["nodes"]}
+    assert node_ids == {"S3-264202", "S3-264203"}
+    assert all(
+        edge["source"] in node_ids and edge["target"] in node_ids
+        for edge in data["edges"]
+    )
+    assert all(edge["target"] != "S3-999999" for edge in data["edges"])
+
+
 def test_timeline_aggregates_events(client: TestClient) -> None:
     response = client.get("/api/tdocs/S3-264202/timeline")
     assert response.status_code == 200
@@ -235,22 +261,121 @@ def test_timeline_aggregates_events(client: TestClient) -> None:
     assert client.get("/api/tdocs/S3-999999/timeline").status_code == 404
 
 
-def test_lineage_tracked_and_full(client: TestClient) -> None:
+def test_lineage_note_badge_uses_latest_non_default_note(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    connection = seeded_folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
+            "author, source, created_at, updated_at) "
+            "VALUES ('tdoc', 'S3-264202', 'Actually object.', 'Object', "
+            "'ben', 'user', ?, ?)",
+            ("2026-10-16T14:00:00.000000Z", "2026-10-16T14:00:00.000000Z"),
+        )
+        connection.execute(
+            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
+            "author, source, created_at, updated_at) "
+            "VALUES ('tdoc', 'S3-264203', 'Untagged note.', NULL, "
+            "'ben', 'user', ?, ?)",
+            ("2026-10-16T15:00:00.000000Z", "2026-10-16T15:00:00.000000Z"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    tracked = client.get("/api/lineage", params={"tracked": "true"}).json()
+    badges = {node["tdoc_number"]: node["note_badge"] for node in tracked["nodes"]}
+    assert badges == {"S3-264202": "Object", "S3-264203": "note"}
+
+
+def test_lineage_tracked_and_full(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
     tracked = client.get("/api/lineage", params={"tracked": "true"}).json()
     assert {node["tdoc_number"] for node in tracked["nodes"]} == {
         "S3-264202",
         "S3-264203",
     }
+    badges = {node["tdoc_number"]: node["note_badge"] for node in tracked["nodes"]}
+    assert badges == {"S3-264202": "Support", "S3-264203": None}
     assert len(tracked["edges"]) == 1
     assert tracked["edges"][0]["kind"] == "revision_of"
 
     full = client.get("/api/lineage").json()
     assert any(node["tdoc_number"] == "S3-264999" for node in full["nodes"])
 
+    connection = seeded_folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO assertion(subject_kind, subject_ref, predicate, "
+            "object_kind, object_ref, source, confidence, verified, active, "
+            "muted, observed_at) VALUES "
+            "('tdoc', 'S3-264203', 'based_on', 'tdoc', 'S3-264202', "
+            "'user', 1.0, 1, 0, 1, '2026-10-16T13:00:00.000000Z')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
     with_inactive = client.get(
         "/api/lineage", params={"include_inactive": "true"}
     ).json()
     assert any(edge["active"] is False for edge in with_inactive["edges"])
+    node_ids = {node["tdoc_number"] for node in with_inactive["nodes"]}
+    assert all(
+        edge["source"] in node_ids and edge["target"] in node_ids
+        for edge in with_inactive["edges"]
+    )
+
+
+def test_lineage_can_include_working_drafts(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    default = client.get("/api/lineage", params={"tracked": "true"}).json()
+    assert all(node.get("node_kind", "tdoc") == "tdoc" for node in default["nodes"])
+
+    data = client.get(
+        "/api/lineage",
+        params={"tracked": "true", "include_drafts": "true"},
+    ).json()
+    drafts = [node for node in data["nodes"] if node["node_kind"] == "draft"]
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft["attached_to"] == "S3-264202"
+    assert draft["tdoc_number"].startswith("draft:")
+    assert draft["title"] == "draft S3-264202-r1.docx"
+    assert draft["status"] in {"present", "remote"}
+    assert draft["artifact_id"] is not None
+
+    links = [edge for edge in data["edges"] if edge["kind"] == "has_draft"]
+    assert links == [
+        {
+            "source": "S3-264202",
+            "target": draft["tdoc_number"],
+            "kind": "has_draft",
+            "confidence": 1.0,
+            "verified": True,
+            "source_ref": None,
+            "active": True,
+            "muted": False,
+        }
+    ]
+
+
+def test_tracked_only_lineage_is_empty_without_tracked_tdocs(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    connection = seeded_folder.connect()
+    try:
+        connection.execute("UPDATE tdoc SET is_tracked = 0")
+        connection.execute("DELETE FROM tracked_tdoc")
+        connection.commit()
+    finally:
+        connection.close()
+
+    data = client.get("/api/lineage", params={"tracked": "true"}).json()
+    assert data == {"nodes": [], "edges": []}
 
 
 def test_mail_filters_and_search(client: TestClient) -> None:

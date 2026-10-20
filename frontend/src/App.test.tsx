@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import type { LineageNode } from "./types";
 import {
   conflicts,
   detail,
@@ -12,6 +13,7 @@ import {
   sync,
   tdocs,
   timeline,
+  userActions,
 } from "./test/fixtures";
 
 function json(data: unknown): Response {
@@ -55,6 +57,7 @@ function installFetch() {
       }
       if (url.startsWith("/api/lineage")) return json(lineage);
       if (url === "/api/notifications") return json(notifications);
+      if (url === "/api/log") return json(userActions);
       if (url === "/api/conflicts") return json(conflicts);
       if (url.endsWith("/resolve")) {
         return json({ ...conflicts[0], status: "resolved" });
@@ -70,8 +73,11 @@ function installFetch() {
       if (url === "/api/notes/1" && method === "DELETE") {
         return new Response(null, { status: 204 });
       }
-      if (url === "/api/tdocs/S3-264202/track") {
-        return json({ tdoc_number: "S3-264202", is_tracked: true });
+      if (url.endsWith("/track")) {
+        return json({
+          tdoc_number: "S3-264202",
+          is_tracked: method === "POST",
+        });
       }
       if (url === "/api/assertions/7") {
         return json({ ...conflicts[0].assertions[0], id: 7, active: true });
@@ -122,11 +128,15 @@ describe("App", () => {
 
     expect(await screen.findByText("SA3#130 Prague")).toBeInTheDocument();
     const rail = screen.getByLabelText("Tracked TDocs and filters");
+    expect(within(rail).getByLabelText("Search TDocs")).toBeInTheDocument();
     expect(within(rail).getByText("S3-264202")).toBeInTheDocument();
+    expect(within(rail).getByLabelText("Include Drafts")).toBeChecked();
+    expect(within(rail).queryByText("Include ephemeral")).not.toBeInTheDocument();
     expect(screen.getByLabelText("TDoc detail")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Lineage" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Notifications/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Log/ })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Discovery" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "New numbers" })).not.toBeInTheDocument();
     expect(screen.getByText("ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3")).toBeInTheDocument();
@@ -147,6 +157,15 @@ describe("App", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("focuses the lineage when a filtered TDoc is double-clicked", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    fireEvent.doubleClick(within(rail).getByText("S3-264203"));
+
+    const canvas = screen.getByTestId("lineage-scroll");
+    await waitFor(() => expect(canvas.scrollLeft).toBeGreaterThan(0));
+  });
+
   it("applies state filters through the API", async () => {
     render(<App />);
     const rail = await screen.findByLabelText("Tracked TDocs and filters");
@@ -158,6 +177,63 @@ describe("App", () => {
       expect(within(rail).queryByText("S3-264202")).not.toBeInTheDocument();
     });
     expect(within(rail).getByText("S3-264203")).toBeInTheDocument();
+  });
+
+  it("shows the user action log", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: /Log/ }));
+    const list = await screen.findByLabelText("User action log");
+    expect(within(list).getByText("note created")).toBeInTheDocument();
+    expect(within(list).getByText("[Support] Support this CR.")).toBeInTheDocument();
+    fireEvent.click(
+      within(list).getAllByRole("button", { name: "S3-264202" })[0],
+    );
+    expect(
+      await screen.findByLabelText("Detail for S3-264202"),
+    ).toBeInTheDocument();
+  });
+
+  it("hides drafts through the Include Drafts filter", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    fireEvent.click(within(rail).getByLabelText("Include Drafts"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.map((call) => String(call[0])),
+      ).toContain(
+        "/api/lineage?tracked=false&include_inactive=false&include_drafts=false",
+      );
+    });
+  });
+
+  it("tracks a TDoc from the left rail star", async () => {
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Untrack S3-264202" }),
+    );
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/tdocs/S3-264202/track" &&
+          init?.method === "DELETE",
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it("toggles tracking by double-clicking a lineage node", async () => {
+    render(<App />);
+    fireEvent.doubleClick(
+      await screen.findByRole("button", { name: /S3-264203 Revised CR agreed/ }),
+    );
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/tdocs/S3-264203/track" &&
+          init?.method === "POST",
+      );
+      expect(call).toBeTruthy();
+    });
   });
 
   it("shows notifications and syncs on demand", async () => {
@@ -228,6 +304,7 @@ describe("App", () => {
     });
     expect(original).toHaveClass("state-merged", "tracked");
     expect(within(original).getByText("★")).toBeInTheDocument();
+    expect(within(original).getByTestId("note-badge-S3-264202")).toBeInTheDocument();
     const revised = screen.getByRole("button", {
       name: /S3-264203 Revised CR agreed/,
     });
@@ -243,6 +320,61 @@ describe("App", () => {
     expect(
       within(panel).getByText(/FTP uploaded 2026-10-16T09:55:00/),
     ).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("link", {
+        name: "draft S3-264202-r1.docx",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "https://10.10.10.10/ftp/Meetings_3GPP_SYNC/SA3/Inbox/Drafts/draft%20S3-264202-r1.docx",
+    );
+  });
+
+  it("opens the parent TDoc and highlights a clicked draft link", async () => {
+    const original = fetchMock.getMockImplementation();
+    const draft: LineageNode = {
+      ...lineage.nodes[0],
+      tdoc_number: "draft:1",
+      title: "draft S3-264202-r1.docx",
+      decision: "present",
+      node_kind: "draft",
+      attached_to: "S3-264202",
+      artifact_id: 1,
+      status: "present",
+    };
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).startsWith("/api/lineage")) {
+        return json({
+          ...lineage,
+          nodes: [...lineage.nodes, draft],
+          edges: [
+            ...lineage.edges,
+            {
+              source: "S3-264202",
+              target: "draft:1",
+              kind: "has_draft",
+              confidence: 1,
+              verified: true,
+              source_ref: null,
+            },
+          ],
+        });
+      }
+      return original ? original(input, init) : json({});
+    });
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /draft draft S3-264202-r1.docx for S3-264202 present/,
+      }),
+    );
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    expect(
+      await within(panel).findByRole("link", {
+        name: "draft S3-264202-r1.docx",
+      }),
+    ).toHaveClass("artifact-highlight");
   });
 
   it("fetches deferred artifacts when a TDoc is opened", async () => {

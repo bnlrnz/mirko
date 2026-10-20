@@ -138,6 +138,14 @@ def test_track_and_note_endpoints(tmp_path: Path) -> None:
     assert note.json()["id"] >= 1
     assert client.get("/api/tdocs/S3-264202").json()["notes_count"] == 1
 
+    log = client.get("/api/log").json()
+    assert [(item["action"], item["target_ref"]) for item in log[:3]] == [
+        ("note_created", "S3-264202"),
+        ("untrack", "S3-264202"),
+        ("track", "S3-264202"),
+    ]
+    assert log[0]["detail"] == "[Support] Support this CR."
+
     assert client.post("/api/tdocs/S3-999999/track").status_code == 404
     assert client.delete("/api/tdocs/S3-999999/track").status_code == 404
     assert (

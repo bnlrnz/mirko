@@ -4,9 +4,11 @@ import type {
   Lineage,
   NotificationItem,
   TimelineEvent,
+  UserAction,
 } from "../types";
 import { ConflictsView } from "./ConflictsView";
 import { LineageView } from "./LineageView";
+import { LogView } from "./LogView";
 import { NotificationsView } from "./NotificationsView";
 import { TimelineView } from "./TimelineView";
 
@@ -14,7 +16,8 @@ export type CenterTab =
   | "lineage"
   | "timeline"
   | "conflicts"
-  | "notifications";
+  | "notifications"
+  | "log";
 
 interface Props {
   tab: CenterTab;
@@ -22,9 +25,12 @@ interface Props {
   lineage: Lineage;
   timeline: TimelineEvent[];
   notifications: NotificationItem[];
+  log: UserAction[];
   conflicts: Conflict[];
   selected: string | null;
-  onSelect: (tdoc: string) => void;
+  includeDrafts: boolean;
+  onSelect: (tdoc: string, artifactId?: number) => void;
+  focusRequest: { tdoc: string; nonce: number } | null;
   onResolve: (id: number, resolution: ConflictResolution) => void;
   onTrack: (tdoc: string, tracked: boolean) => void;
 }
@@ -34,6 +40,7 @@ const TABS: { id: CenterTab; label: string }[] = [
   { id: "timeline", label: "Timeline" },
   { id: "conflicts", label: "Conflicts" },
   { id: "notifications", label: "Notifications" },
+  { id: "log", label: "Log" },
 ];
 
 export function CenterPane({
@@ -42,9 +49,12 @@ export function CenterPane({
   lineage,
   timeline,
   notifications,
+  log,
   conflicts,
   selected,
+  includeDrafts,
   onSelect,
+  focusRequest,
   onResolve,
   onTrack,
 }: Props) {
@@ -67,6 +77,9 @@ export function CenterPane({
             {item.id === "notifications" && notifications.length > 0 ? (
               <span className="count">{notifications.length}</span>
             ) : null}
+            {item.id === "log" && log.length > 0 ? (
+              <span className="count">{log.length}</span>
+            ) : null}
           </button>
         ))}
       </nav>
@@ -75,7 +88,10 @@ export function CenterPane({
           <LineageView
             lineage={lineage}
             selected={selected}
+            includeDrafts={includeDrafts}
             onSelect={onSelect}
+            focusRequest={focusRequest}
+            onTrack={onTrack}
           />
         ) : null}
         {tab === "timeline" ? (
@@ -95,6 +111,7 @@ export function CenterPane({
             onTrack={(tdoc) => onTrack(tdoc, true)}
           />
         ) : null}
+        {tab === "log" ? <LogView items={log} onSelect={onSelect} /> : null}
       </div>
     </section>
   );

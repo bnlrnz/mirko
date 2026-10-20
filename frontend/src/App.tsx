@@ -19,6 +19,7 @@ import type {
   TdocDetail,
   TdocSummary,
   TimelineEvent,
+  UserAction,
 } from "./types";
 
 const EMPTY_FILTERS: Filters = {
@@ -36,10 +37,18 @@ export default function App() {
   const [tdocs, setTdocs] = useState<TdocSummary[]>([]);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [selected, setSelected] = useState<string | null>(null);
+  const [lineageFocus, setLineageFocus] = useState<{
+    tdoc: string;
+    nonce: number;
+  } | null>(null);
+  const [highlightArtifact, setHighlightArtifact] = useState<number | null>(
+    null,
+  );
   const [detail, setDetail] = useState<TdocDetail | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [log, setLog] = useState<UserAction[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [tab, setTab] = useState<CenterTab>("lineage");
@@ -51,32 +60,67 @@ export default function App() {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [fetching, setFetching] = useState(false);
   const fetched = useRef(new Set<string>());
+  const staticRequest = useRef(0);
+
+  const clearArtifactHighlight = useCallback(() => {
+    setHighlightArtifact(null);
+  }, []);
+
+  const onSelect = useCallback((tdoc: string, artifactId?: number) => {
+    setSelected(tdoc);
+    setHighlightArtifact(artifactId ?? null);
+  }, []);
+
+  const onFocusTdoc = useCallback(
+    (tdoc: string) => {
+      onSelect(tdoc);
+      setTab("lineage");
+      setLineageFocus((current) => ({
+        tdoc,
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+    },
+    [onSelect],
+  );
 
   const refreshStatic = useCallback(async () => {
+    const request = ++staticRequest.current;
     try {
       const [
         meetingData,
         lineageData,
         notificationData,
+        logData,
         syncData,
         conflictData,
       ] = await Promise.all([
         api.meeting(),
-        api.lineage(filters.tracked),
+        api.lineage(
+          filters.tracked,
+          false,
+          filters.includeEphemeral,
+        ),
         api.notifications(),
+        api.log(),
         api.syncStatus(),
         api.conflicts(),
       ]);
+      if (request !== staticRequest.current) {
+        return;
+      }
       setMeeting(meetingData);
       setLineage(lineageData);
       setNotifications(notificationData);
+      setLog(logData);
       setSync(syncData);
       setConflicts(conflictData);
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (request === staticRequest.current) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     }
-  }, [filters.tracked]);
+  }, [filters.includeEphemeral, filters.tracked]);
 
   const refreshTdocs = useCallback(async () => {
     try {
@@ -218,24 +262,24 @@ export default function App() {
         });
         setDetail(await api.tdoc(selected));
         setTimeline(await api.timeline(selected));
-        await refreshTdocs();
+        await Promise.all([refreshStatic(), refreshTdocs()]);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refreshTdocs, selected],
+    [refreshStatic, refreshTdocs, selected],
   );
 
   const onDeleteNote = useCallback(
     async (noteId: number) => {
       try {
         await api.deleteNote(noteId);
-        await Promise.all([refreshDetail(), refreshTdocs()]);
+        await Promise.all([refreshDetail(), refreshStatic(), refreshTdocs()]);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refreshDetail, refreshTdocs],
+    [refreshDetail, refreshStatic, refreshTdocs],
   );
 
   const onAddAssertion = useCallback(
@@ -365,11 +409,9 @@ export default function App() {
     <div className="app-shell">
       <TopBar
         meeting={meeting}
-        filters={filters}
         sync={sync}
         busy={busy}
         exportPath={exportPath}
-        onFilters={setFilters}
         onSync={onSync}
         onExport={onExport}
         onFinalize={onFinalize}
@@ -387,7 +429,9 @@ export default function App() {
           filters={filters}
           selected={selected}
           onFilters={setFilters}
-          onSelect={setSelected}
+          onSelect={onSelect}
+          onFocusTdoc={onFocusTdoc}
+          onTrack={onTrack}
         />
         <CenterPane
           tab={tab}
@@ -395,14 +439,18 @@ export default function App() {
           lineage={lineage}
           timeline={timeline}
           notifications={notifications}
+          log={log}
           conflicts={conflicts}
           selected={selected}
-          onSelect={setSelected}
+          includeDrafts={filters.includeEphemeral}
+          onSelect={onSelect}
+          focusRequest={lineageFocus}
           onResolve={onResolveConflict}
           onTrack={onTrack}
         />
         <DetailPanel
           detail={detail}
+          endpoint={meeting?.endpoint ?? null}
           includeEphemeral={filters.includeEphemeral}
           conflicts={selectedConflicts}
           onTrack={onTrack}
@@ -410,9 +458,11 @@ export default function App() {
           onDeleteNote={onDeleteNote}
           onAddAssertion={onAddAssertion}
           onResolveConflict={onResolveConflict}
-          onSelect={setSelected}
+          onSelect={onSelect}
           onFetch={onFetch}
           fetching={fetching}
+          highlightArtifactId={highlightArtifact}
+          onClearArtifactHighlight={clearArtifactHighlight}
         />
       </main>
       {settingsOpen && settings ? (

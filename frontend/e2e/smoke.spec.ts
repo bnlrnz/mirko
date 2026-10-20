@@ -9,6 +9,7 @@ import {
   sync,
   tdocs,
   timeline,
+  userActions,
 } from "../src/test/fixtures";
 
 test("three-pane navigation, selection sync, and conflict resolution", async ({
@@ -29,6 +30,7 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
     if (path === "/api/meeting") return json(meeting);
     if (path === "/api/lineage") return json(lineage);
     if (path === "/api/notifications") return json(notifications);
+    if (path === "/api/log") return json(userActions);
     if (path === "/api/conflicts") return json(conflicts);
     if (path === "/api/sync/status") return json(sync);
     if (path === "/api/sync") return json({ status: "ok" });
@@ -74,6 +76,11 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
   await expect(detailPanel.getByText("Revised CR")).toBeVisible();
   await expect(detailPanel.getByRole("button", { name: /Track/ })).toBeVisible();
 
+  await page
+    .getByRole("button", { name: /S3-264203 Revised CR agreed/ })
+    .click();
+  await expect(detailPanel).toBeVisible();
+
   await page.getByRole("tab", { name: "Timeline" }).click();
   await expect(
     page.getByText("[SA3#130][S3-264202] CR on QUIC").first(),
@@ -87,4 +94,8 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
 
   await page.getByRole("tab", { name: /Notifications/ }).click();
   await expect(page.getByText("New link to S3-264999")).toBeVisible();
+
+  await page.getByRole("tab", { name: /Log/ }).click();
+  await expect(page.getByLabel("User action log")).toBeVisible();
+  await expect(page.getByText("note created")).toBeVisible();
 });

@@ -200,3 +200,10 @@ def test_assertion_patch_and_note_lifecycle(tmp_path: Path) -> None:
     assert client.delete(f"/api/notes/{note['id']}").status_code == 204
     assert client.get("/api/tdocs/S3-264202").json()["notes_count"] == 0
     assert client.delete(f"/api/notes/{note['id']}").status_code == 404
+
+    log = client.get("/api/log").json()
+    assert [item["action"] for item in log[:3]] == [
+        "note_deleted",
+        "note_updated",
+        "note_created",
+    ]
