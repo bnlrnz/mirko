@@ -45,6 +45,7 @@ class MeetingResponse(BaseModel):
     tdoc_series_prefix: str
     source_kind: str
     endpoint: str
+    bar_color: str
 
 
 class HealthResponse(BaseModel):
@@ -98,7 +99,6 @@ class NoteSummary(BaseModel):
     target_kind: str
     target_ref: str
     body: str
-    position_tag: str | None = None
     author: str | None = None
     source: str
     created_at: str
@@ -138,6 +138,7 @@ class AssertionSummary(BaseModel):
 
 class TdocDetail(TdocSummary):
     raw_meta: Any = None
+    node_status: str | None = None
     artifacts: list[ArtifactSummary] = []
     notes: list[NoteSummary] = []
     emails: list[MailSummary] = []
@@ -149,6 +150,7 @@ class DraftDetail(ArtifactSummary):
     title: str
     parent_title: str | None = None
     agenda_item: str | None = None
+    node_status: str | None = None
     notes: list[NoteSummary] = []
 
 
@@ -171,10 +173,12 @@ class LineageNode(BaseModel):
     state_source: str | None = None
     agenda_item: str | None = None
     type: str | None = None
+    source: str | None = None
     is_tracked: bool = False
     is_provisional: bool = False
     first_seen_at: str | None = None
-    note_badge: str | None = None
+    notes_count: int = 0
+    node_status: str | None = None
     node_kind: str = "tdoc"
     attached_to: str | None = None
     artifact_id: int | None = None
@@ -241,7 +245,6 @@ class NoteRequest(BaseModel):
     target_kind: str
     target_ref: str
     body: str
-    position_tag: str | None = None
 
 
 class NoteResponse(BaseModel):
@@ -249,11 +252,22 @@ class NoteResponse(BaseModel):
     target_kind: str
     target_ref: str
     body: str
-    position_tag: str | None = None
     author: str | None = None
     source: str
     created_at: str
     updated_at: str
+
+
+class NodeStatusRequest(BaseModel):
+    target_kind: Literal["tdoc", "draft"]
+    target_ref: str
+    status: Literal["Support", "Object", "Clarify"] | None = None
+
+
+class NodeStatusResponse(BaseModel):
+    target_kind: str
+    target_ref: str
+    status: str | None = None
 
 
 class AssertionResponse(BaseModel):
@@ -309,7 +323,6 @@ class ConflictResolveRequest(BaseModel):
 
 class NotePatch(BaseModel):
     body: str | None = None
-    position_tag: Literal["Support", "Object", "Clarify"] | None = None
 
 
 class FinalizeResponse(BaseModel):
@@ -341,13 +354,21 @@ class SettingsSource(BaseModel):
     tls: str
 
 
+class SettingsMail(BaseModel):
+    kind: Literal["mbox", "eml"]
+    path: str | None = None
+    eml_dir: str | None = None
+
+
 class SettingsResponse(BaseModel):
     source: SettingsSource
+    mail: SettingsMail | None = None
     lazy_drafts: bool
     excel: str
     auto_sync: bool
     meeting_interval_s: int
     idle_interval_s: int
+    bar_color: str
 
 
 class SettingsUpdate(BaseModel):
@@ -360,10 +381,12 @@ class SettingsUpdate(BaseModel):
     password: str | None = None
     clear_password: bool = False
     tls: str = "none"
+    mail: SettingsMail | None = None
     lazy_drafts: bool = True
     auto_sync: bool | None = None
     meeting_interval_s: int | None = None
     idle_interval_s: int | None = None
+    bar_color: str | None = None
 
 
 class ExcelImportResponse(BaseModel):
@@ -486,6 +509,7 @@ def create_app(
             tdoc_series_prefix=config.meeting.tdoc_series_prefix,
             source_kind=config.source.kind,
             endpoint=config.source.endpoint_id,
+            bar_color=config.ui.bar_color,
         )
 
     def settings_response() -> SettingsResponse:
@@ -505,11 +529,21 @@ def create_app(
                 password_env=config.source.password_env,
                 tls=config.source.tls,
             ),
+            mail=(
+                SettingsMail(
+                    kind=config.mail.kind,
+                    path=config.mail.path,
+                    eml_dir=config.mail.eml_dir,
+                )
+                if config.mail is not None
+                else None
+            ),
             lazy_drafts=config.sync.lazy_drafts,
             excel=config.paths.excel,
             auto_sync=config.poll.auto_sync,
             meeting_interval_s=config.poll.meeting_interval_s,
             idle_interval_s=config.poll.idle_interval_s,
+            bar_color=config.ui.bar_color,
         )
 
     @app.get("/api/settings", response_model=SettingsResponse)
@@ -541,6 +575,15 @@ def create_app(
             elif payload.password:
                 source["password"] = payload.password
                 source.pop("password_env", None)
+            if "mail" in payload.model_fields_set:
+                if payload.mail is None:
+                    data.pop("mail", None)
+                else:
+                    data["mail"] = {
+                        "kind": payload.mail.kind,
+                        "path": payload.mail.path,
+                        "eml_dir": payload.mail.eml_dir,
+                    }
             sync = data.setdefault("sync", {})
             sync["lazy_drafts"] = payload.lazy_drafts
             poll = data.setdefault("poll", {})
@@ -550,6 +593,9 @@ def create_app(
                 poll["meeting_interval_s"] = payload.meeting_interval_s
             if payload.idle_interval_s is not None:
                 poll["idle_interval_s"] = payload.idle_interval_s
+            if payload.bar_color is not None:
+                ui = data.setdefault("ui", {})
+                ui["bar_color"] = payload.bar_color
             try:
                 folder.update_config(data)
             except ConfigError as exc:
@@ -801,37 +847,52 @@ def create_app(
     def post_note(payload: NoteRequest) -> dict:
         if not payload.body.strip():
             raise HTTPException(status_code=422, detail="note body is empty")
-        if payload.target_kind == "tdoc":
-            exists = with_connection(
-                lambda connection: repository.get_tdoc(
-                    connection, payload.target_ref
-                )
-            )
-            if exists is None:
-                raise HTTPException(status_code=404, detail="tdoc not found")
-        elif payload.target_kind == "draft":
-            try:
-                artifact_id = int(payload.target_ref)
-            except ValueError:
-                raise HTTPException(
-                    status_code=422, detail="draft target_ref must be an id"
-                ) from None
-            exists = with_connection(
-                lambda connection: repository.get_draft(
-                    connection, artifact_id
-                )
-            )
-            if exists is None:
-                raise HTTPException(status_code=404, detail="draft not found")
+        require_target(payload.target_kind, payload.target_ref)
         return with_connection(
             lambda connection: repository.add_note(
                 connection,
                 target_kind=payload.target_kind,
                 target_ref=payload.target_ref,
                 body=payload.body,
-                position_tag=payload.position_tag,
             )
         )
+
+    def require_target(target_kind: str, target_ref: str) -> None:
+        if target_kind == "tdoc":
+            exists = with_connection(
+                lambda connection: repository.get_tdoc(connection, target_ref)
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="tdoc not found")
+            return
+        try:
+            artifact_id = int(target_ref)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="draft target_ref must be an id"
+            ) from None
+        exists = with_connection(
+            lambda connection: repository.get_draft(connection, artifact_id)
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="draft not found")
+
+    @app.put("/api/status", response_model=NodeStatusResponse)
+    def put_status(payload: NodeStatusRequest) -> dict:
+        require_target(payload.target_kind, payload.target_ref)
+        status = with_connection(
+            lambda connection: repository.set_node_status(
+                connection,
+                target_kind=payload.target_kind,
+                target_ref=payload.target_ref,
+                status=payload.status,
+            )
+        )
+        return {
+            "target_kind": payload.target_kind,
+            "target_ref": payload.target_ref,
+            "status": status,
+        }
 
     @app.get("/api/conflicts", response_model=list[ConflictResponse])
     def get_conflicts(status: str | None = "open") -> list[dict]:
@@ -900,7 +961,6 @@ def create_app(
                 connection,
                 note_id,
                 body=payload.body,
-                position_tag=payload.position_tag,
             )
         )
         if result is None:

@@ -149,6 +149,8 @@ def render_markdown(
             lines.append(f"- Agenda: {_cell(detail['agenda_item'])}")
             lines.append(f"- Type: {_cell(detail['type'])}")
             lines.append(f"- State: {_cell(detail['decision'])}")
+            if detail["node_status"]:
+                lines.append(f"- Status: {_cell(detail['node_status'])}")
             lines.append(f"- Source: {_cell(detail['source'])}")
             lines.append(f"- For: {_cell(detail['for_action'])}")
             lines.append(
@@ -192,8 +194,7 @@ def render_markdown(
             if not detail["notes"]:
                 lines.append("_No notes._")
             for note in detail["notes"]:
-                tag = f"[{note['position_tag']}] " if note["position_tag"] else ""
-                lines.append(f"- {tag}{note['body']}")
+                lines.append(f"- {note['body']}")
             lines.append("")
 
             if include_mail:

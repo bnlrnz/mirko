@@ -23,6 +23,7 @@ export const meeting: Meeting = {
   tdoc_series_prefix: "S3-26",
   source_kind: "local",
   endpoint: "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3",
+  bar_color: "#ffffff",
 };
 
 export const tdocs: TdocSummary[] = [
@@ -88,7 +89,8 @@ export const lineage: Lineage = {
       is_tracked: true,
       is_provisional: false,
       first_seen_at: "2026-10-16T10:00:00.000000Z",
-      note_badge: "Support",
+      notes_count: 1,
+      node_status: "Support",
     },
     {
       tdoc_number: "S3-264203",
@@ -100,6 +102,8 @@ export const lineage: Lineage = {
       is_tracked: false,
       is_provisional: false,
       first_seen_at: "2026-10-16T10:05:00.000000Z",
+      notes_count: 0,
+      node_status: null,
     },
   ],
   edges: [
@@ -120,7 +124,7 @@ export const userActions: UserAction[] = [
     action: "note_created",
     target_kind: "tdoc",
     target_ref: "S3-264202",
-    detail: "[Support] Support this CR.",
+    detail: "Support this CR.",
     created_at: "2026-10-16T13:00:00.000000Z",
   },
   {
@@ -136,6 +140,7 @@ export const userActions: UserAction[] = [
 export const detail: TdocDetail = {
   ...tdocs[0],
   raw_meta: null,
+  node_status: "Support",
   artifacts: [
     {
       id: 1,
@@ -157,7 +162,6 @@ export const detail: TdocDetail = {
       target_kind: "tdoc",
       target_ref: "S3-264202",
       body: "Support this CR.",
-      position_tag: "Support",
       author: "ben",
       source: "user",
       created_at: "2026-10-16T13:00:00.000000Z",
@@ -226,6 +230,7 @@ export const draft: DraftDetail = {
   title: "draft S3-264202-r1.docx",
   parent_title: "Original CR",
   agenda_item: "5.3.1.3",
+  node_status: "Clarify",
   notes: [],
 };
 
@@ -367,9 +372,15 @@ export const settings: Settings = {
     password_env: null,
     tls: "none",
   },
+  mail: {
+    kind: "mbox",
+    path: "/home/ben/mail/sa3-130.mbox",
+    eml_dir: null,
+  },
   lazy_drafts: true,
   excel: "S3-26_meeting_allocation.xlsx",
   auto_sync: true,
   meeting_interval_s: 45,
   idle_interval_s: 600,
+  bar_color: "#ffffff",
 };

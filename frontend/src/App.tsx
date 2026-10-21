@@ -13,6 +13,7 @@ import type {
   Filters,
   Lineage,
   Meeting,
+  NodeStatus,
   NotificationItem,
   Settings,
   SettingsUpdate,
@@ -30,7 +31,6 @@ const EMPTY_FILTERS: Filters = {
   source: "",
   tracked: false,
   includeEphemeral: true,
-  search: "",
 };
 
 function sendSystemNotification(
@@ -249,18 +249,11 @@ export default function App() {
 
   const refreshTdocs = useCallback(async () => {
     try {
-      const rows = await api.tdocs({
-        agenda: filters.agenda || undefined,
-        type: filters.type || undefined,
-        state: filters.state || undefined,
-        source: filters.source || undefined,
-        tracked: filters.tracked ? true : undefined,
-      });
-      setTdocs(rows);
+      setTdocs(await api.tdocs({ tracked: true }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [filters.agenda, filters.source, filters.state, filters.tracked, filters.type]);
+  }, []);
 
   useEffect(() => {
     void refreshStatic();
@@ -321,18 +314,6 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedDraft]);
-
-  const visibleTdocs = useMemo(() => {
-    const needle = filters.search.trim().toLowerCase();
-    if (!needle) {
-      return tdocs;
-    }
-    return tdocs.filter((row) =>
-      [row.tdoc_number, row.title, row.topic, row.agenda_item]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle)),
-    );
-  }, [filters.search, tdocs]);
 
   const refreshDetail = useCallback(async () => {
     if (!selected) {
@@ -446,7 +427,6 @@ export default function App() {
   const onAddNote = useCallback(
     async (
       body: string,
-      position: string,
       target: { kind: "tdoc" | "draft"; ref: string },
     ) => {
       try {
@@ -454,11 +434,34 @@ export default function App() {
           target_kind: target.kind,
           target_ref: target.ref,
           body,
-          position_tag: position || null,
         });
         if (target.kind === "tdoc") {
           setDetail(await api.tdoc(target.ref));
           setTimeline(await api.timeline(target.ref));
+        } else {
+          setDraft(await api.draft(Number(target.ref)));
+        }
+        await Promise.all([refreshStatic(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshStatic, refreshTdocs],
+  );
+
+  const onSetStatus = useCallback(
+    async (
+      status: NodeStatus | null,
+      target: { kind: "tdoc" | "draft"; ref: string },
+    ) => {
+      try {
+        await api.setStatus({
+          target_kind: target.kind,
+          target_ref: target.ref,
+          status,
+        });
+        if (target.kind === "tdoc") {
+          setDetail(await api.tdoc(target.ref));
         } else {
           setDraft(await api.draft(Number(target.ref)));
         }
@@ -648,11 +651,10 @@ export default function App() {
       ) : null}
       <main className="three-pane">
         <LeftRail
-          tdocs={visibleTdocs}
-          allTdocs={tdocs}
-          filters={filters}
+          tdocs={tdocs}
           selected={selected}
-          onFilters={setFilters}
+          notifications={notifications}
+          seenNotifications={seenNotifications}
           onSelect={onSelect}
           onFocusTdoc={onFocusTdoc}
           onTrack={onTrack}
@@ -670,7 +672,9 @@ export default function App() {
           conflicts={conflicts}
           selected={selected}
           selectedDraft={selectedDraft}
-          includeDrafts={filters.includeEphemeral}
+          filters={filters}
+          favoriteOrder={tdocs.map((row) => row.tdoc_number)}
+          onFilters={setFilters}
           onSelect={onSelect}
           onSelectDraft={onSelectDraft}
           focusRequest={lineageFocus}
@@ -683,10 +687,10 @@ export default function App() {
           detail={detail}
           draft={draft}
           endpoint={meeting?.endpoint ?? null}
-          includeEphemeral={filters.includeEphemeral}
           conflicts={selectedConflicts}
           onTrack={onTrack}
           onAddNote={onAddNote}
+          onSetStatus={onSetStatus}
           onDeleteNote={onDeleteNote}
           onAddAssertion={onAddAssertion}
           onResolveConflict={onResolveConflict}

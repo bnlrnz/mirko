@@ -84,7 +84,7 @@ def test_full_config_maps_all_sections() -> None:
         "jitter": 0.1,
     }
     data["tracked_seed"] = ["S3-264481", "s3-264388"]
-    data["ui"] = {"default_mode": "lineage"}
+    data["ui"] = {"default_mode": "lineage", "bar_color": "#2457c5"}
 
     config = validate_config(data)
 
@@ -96,6 +96,7 @@ def test_full_config_maps_all_sections() -> None:
     assert config.poll.jitter == pytest.approx(0.1)
     assert config.tracked_seed == ("S3-264481", "S3-264388")
     assert config.ui.default_mode == "lineage"
+    assert config.ui.bar_color == "#2457c5"
     assert config.warnings == ()
 
 
@@ -358,6 +359,15 @@ def test_ui_mode_validation() -> None:
     with pytest.raises(ConfigError) as exc:
         validate_config(data)
     assert "ui.default_mode" in error_text(exc)
+
+
+@pytest.mark.parametrize("bar_color", ["#12345", "2457c5", "#2457c5ff", "red"])
+def test_ui_bar_color_validation(bar_color: str) -> None:
+    data = minimal_config()
+    data["ui"] = {"bar_color": bar_color}
+    with pytest.raises(ConfigError) as exc:
+        validate_config(data)
+    assert "ui.bar_color" in error_text(exc)
 
 
 def test_load_config_from_file(tmp_path: Path) -> None:

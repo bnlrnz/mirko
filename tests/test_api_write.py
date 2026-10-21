@@ -131,7 +131,6 @@ def test_track_and_note_endpoints(tmp_path: Path) -> None:
             "target_kind": "tdoc",
             "target_ref": "S3-264202",
             "body": "Support this CR.",
-            "position_tag": "Support",
         },
     )
     assert note.status_code == 201
@@ -144,7 +143,31 @@ def test_track_and_note_endpoints(tmp_path: Path) -> None:
         ("untrack", "S3-264202"),
         ("track", "S3-264202"),
     ]
-    assert log[0]["detail"] == "[Support] Support this CR."
+    assert log[0]["detail"] == "Support this CR."
+
+    status = client.put(
+        "/api/status",
+        json={
+            "target_kind": "tdoc",
+            "target_ref": "S3-264202",
+            "status": "Support",
+        },
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "Support"
+    assert client.get("/api/tdocs/S3-264202").json()["node_status"] == "Support"
+
+    cleared = client.put(
+        "/api/status",
+        json={
+            "target_kind": "tdoc",
+            "target_ref": "S3-264202",
+            "status": None,
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["status"] is None
+    assert client.get("/api/tdocs/S3-264202").json()["node_status"] is None
 
     assert client.post("/api/tdocs/S3-999999/track").status_code == 404
     assert client.delete("/api/tdocs/S3-999999/track").status_code == 404
@@ -195,48 +218,69 @@ def test_settings_roundtrip_preserves_unknown_keys(tmp_path: Path) -> None:
     current = client.get("/api/settings").json()
     assert current["source"]["host"] == "10.10.10.10"
     assert current["source"]["password_set"] is False
+    assert current["mail"] is None
     assert current["lazy_drafts"] is True
     assert current["excel"] == "S3-26_meeting_allocation.xlsx"
     assert current["auto_sync"] is True
     assert current["meeting_interval_s"] == 45
     assert current["idle_interval_s"] == 600
+    assert current["bar_color"] == "#ffffff"
 
-    updated = client.put(
-        "/api/settings",
-        json={
-            "kind": "local",
-            "protocol": "ftp",
-            "host": "10.10.10.11",
-            "port": 2121,
-            "base_path": "/Meetings_3GPP_SYNC/SA3/",
-            "username": "mirko",
-            "password": "secret",
-            "tls": "none",
-            "lazy_drafts": False,
-            "auto_sync": False,
-            "meeting_interval_s": 30,
-            "idle_interval_s": 120,
-        },
-    )
+    update = {
+        "kind": "local",
+        "protocol": "ftp",
+        "host": "10.10.10.11",
+        "port": 2121,
+        "base_path": "/Meetings_3GPP_SYNC/SA3/",
+        "username": "mirko",
+        "password": "secret",
+        "tls": "none",
+        "mail": {"kind": "mbox", "path": "/tmp/sa3-130.mbox"},
+        "lazy_drafts": False,
+        "auto_sync": False,
+        "meeting_interval_s": 30,
+        "idle_interval_s": 120,
+        "bar_color": "#2457c5",
+    }
+    updated = client.put("/api/settings", json=update)
     assert updated.status_code == 200, updated.text
     assert updated.json()["source"]["host"] == "10.10.10.11"
     assert updated.json()["source"]["password_set"] is True
+    assert updated.json()["mail"] == {
+        "kind": "mbox",
+        "path": "/tmp/sa3-130.mbox",
+        "eml_dir": None,
+    }
     assert updated.json()["lazy_drafts"] is False
     assert updated.json()["auto_sync"] is False
     assert updated.json()["meeting_interval_s"] == 30
     assert updated.json()["idle_interval_s"] == 120
+    assert updated.json()["bar_color"] == "#2457c5"
 
     saved = json.loads(folder.config_path.read_text())
     assert saved["custom"] == {"keep": True}
     assert saved["source"]["password"] == "secret"
+    assert saved["mail"]["kind"] == "mbox"
+    assert saved["mail"]["path"] == "/tmp/sa3-130.mbox"
     assert saved["sync"]["lazy_drafts"] is False
     assert saved["poll"]["auto_sync"] is False
     assert saved["poll"]["meeting_interval_s"] == 30
     assert saved["poll"]["idle_interval_s"] == 120
+    assert saved["ui"]["bar_color"] == "#2457c5"
     assert stat.S_IMODE(folder.config_path.stat().st_mode) == 0o600
     assert folder.config.source.endpoint_id == (
         "ftp://10.10.10.11:2121/Meetings_3GPP_SYNC/SA3/"
     )
+
+    without_mail = {key: value for key, value in update.items() if key != "mail"}
+    preserved = client.put("/api/settings", json=without_mail)
+    assert preserved.status_code == 200, preserved.text
+    assert preserved.json()["mail"]["kind"] == "mbox"
+
+    cleared = client.put("/api/settings", json={**update, "mail": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["mail"] is None
+    assert "mail" not in json.loads(folder.config_path.read_text())
 
     invalid = client.put(
         "/api/settings",
@@ -253,6 +297,13 @@ def test_settings_roundtrip_preserves_unknown_keys(tmp_path: Path) -> None:
     )
     assert invalid.status_code == 422
     assert "source.host" in invalid.text
+
+    invalid_color = client.put(
+        "/api/settings",
+        json={**update, "bar_color": "blue"},
+    )
+    assert invalid_color.status_code == 422
+    assert "ui.bar_color" in invalid_color.text
 
 
 def test_fetch_endpoint_downloads_deferred_draft(tmp_path: Path) -> None:
@@ -297,7 +348,6 @@ def test_fetch_endpoint_downloads_deferred_draft(tmp_path: Path) -> None:
             "target_kind": "draft",
             "target_ref": str(artifact["id"]),
             "body": "Check the title.",
-            "position_tag": "Clarify",
         },
     )
     assert note.status_code == 201, note.text

@@ -8,6 +8,7 @@ export interface Meeting {
   tdoc_series_prefix: string;
   source_kind: string;
   endpoint: string;
+  bar_color: string;
 }
 
 export interface SettingsSource {
@@ -22,13 +23,21 @@ export interface SettingsSource {
   tls: string;
 }
 
+export interface SettingsMail {
+  kind: "mbox" | "eml";
+  path: string | null;
+  eml_dir: string | null;
+}
+
 export interface Settings {
   source: SettingsSource;
+  mail: SettingsMail | null;
   lazy_drafts: boolean;
   excel: string;
   auto_sync: boolean;
   meeting_interval_s: number;
   idle_interval_s: number;
+  bar_color: string;
 }
 
 export interface SettingsUpdate {
@@ -41,10 +50,12 @@ export interface SettingsUpdate {
   password?: string | null;
   clear_password?: boolean;
   tls: string;
+  mail: SettingsMail | null;
   lazy_drafts: boolean;
   auto_sync: boolean;
   meeting_interval_s: number;
   idle_interval_s: number;
+  bar_color: string;
 }
 
 export interface FetchResult {
@@ -101,12 +112,13 @@ export interface Artifact {
   last_seen_at: string | null;
 }
 
+export type NodeStatus = "Support" | "Object" | "Clarify";
+
 export interface Note {
   id: number;
   target_kind: string;
   target_ref: string;
   body: string;
-  position_tag: "Support" | "Object" | "Clarify" | null;
   author: string | null;
   source: string;
   created_at: string;
@@ -184,6 +196,7 @@ export interface Conflict {
 
 export interface TdocDetail extends TdocSummary {
   raw_meta: unknown;
+  node_status: NodeStatus | null;
   artifacts: Artifact[];
   notes: Note[];
   emails: MailSummary[];
@@ -195,6 +208,7 @@ export interface DraftDetail extends Artifact {
   title: string;
   parent_title: string | null;
   agenda_item: string | null;
+  node_status: NodeStatus | null;
   notes: Note[];
 }
 
@@ -217,10 +231,12 @@ export interface LineageNode {
   state_source: string | null;
   agenda_item: string | null;
   type: string | null;
+  source?: string | null;
   is_tracked: boolean;
   is_provisional: boolean;
   first_seen_at: string | null;
-  note_badge?: string | null;
+  notes_count?: number;
+  node_status?: NodeStatus | null;
   node_kind?: "tdoc" | "draft";
   attached_to?: string | null;
   artifact_id?: number | null;
@@ -268,5 +284,4 @@ export interface Filters {
   source: string;
   tracked: boolean;
   includeEphemeral: boolean;
-  search: string;
 }

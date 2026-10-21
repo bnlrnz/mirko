@@ -221,18 +221,25 @@ class MailIngestor:
         return MailIngestResult(kind="mbox", path=str(path), **result)
 
     def ingest_eml_dir(self, directory: Path) -> MailIngestResult:
-        if not directory.is_dir():
-            raise MailError(f"eml directory not found: {directory}")
+        if directory.is_file():
+            if directory.suffix.lower() != ".eml":
+                raise MailError(f"not an .eml file: {directory}")
+            candidates = [(directory.name, directory)]
+        elif directory.is_dir():
+            candidates = [
+                (path.relative_to(directory).as_posix(), path)
+                for path in sorted(directory.rglob("*.eml"))
+                if path.is_file()
+            ]
+        else:
+            raise MailError(f"eml file or directory not found: {directory}")
         observed_at = _timestamp(self.clock())
         connection = self.folder.connect()
         try:
             state = self._read_state(connection, EML_STATE_KEY)
             next_state: dict[str, list[float]] = {}
             selected: list[tuple[str, bytes]] = []
-            for path in sorted(directory.rglob("*.eml")):
-                if not path.is_file():
-                    continue
-                relative = path.relative_to(directory).as_posix()
+            for relative, path in candidates:
                 stat = path.stat()
                 next_state[relative] = [stat.st_mtime, stat.st_size]
                 if state.get(relative) == next_state[relative]:

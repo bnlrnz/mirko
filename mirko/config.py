@@ -62,7 +62,7 @@ _POLL_KEYS = frozenset(
     }
 )
 _SYNC_KEYS = frozenset({"lazy_drafts"})
-_UI_KEYS = frozenset({"default_mode"})
+_UI_KEYS = frozenset({"default_mode", "bar_color"})
 
 _SOURCE_KINDS = frozenset({"local", "remote", "public"})
 _PROTOCOLS = frozenset({"ftp", "ftps", "https"})
@@ -75,6 +75,7 @@ _TDOC_SEED_RE = re.compile(r"^S3-\d{6}$", re.IGNORECASE)
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _SERIES_PREFIX_RE = re.compile(r"^[A-Za-z0-9]+-\d{2,4}$")
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 _MISSING = object()
 
@@ -176,6 +177,7 @@ class SyncSettings:
 @dataclass(frozen=True)
 class UiSettings:
     default_mode: str = "auto"
+    bar_color: str = "#ffffff"
 
 
 @dataclass(frozen=True)
@@ -671,7 +673,13 @@ def _validate_ui(data: Mapping[str, Any], issues: _Issues) -> UiSettings:
             "ui.default_mode",
             "must be one of " + ", ".join(sorted(_UI_MODES)),
         )
-    return UiSettings(default_mode=mode)
+    bar_color = _string(
+        value, "bar_color", "ui", issues, default="#ffffff", control_safe=True
+    )
+    assert bar_color is not None
+    if not _HEX_COLOR_RE.fullmatch(bar_color):
+        issues.error("ui.bar_color", "must be a hex color like '#2457c5'")
+    return UiSettings(default_mode=mode, bar_color=bar_color)
 
 
 def _validate(

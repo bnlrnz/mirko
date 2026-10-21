@@ -46,7 +46,13 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
       resolved += 1;
       return json({ ...conflicts[0], status: "resolved" });
     }
-    if (path === "/api/tdocs") return json(tdocs);
+    if (path === "/api/tdocs") {
+      return json(
+        url.searchParams.get("tracked") === "true"
+          ? tdocs.filter((tdoc) => tdoc.is_tracked)
+          : tdocs,
+      );
+    }
     if (path === "/api/tdocs/S3-264202") return json(detail);
     if (path === "/api/tdocs/S3-264202/timeline") return json(timeline);
     if (path === "/api/tdocs/S3-264203") {
@@ -68,18 +74,16 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
   await page.goto("/");
   await expect(page.getByText("SA3#130 Prague")).toBeVisible();
 
-  const rail = page.getByLabel("Tracked TDocs and filters");
+  const rail = page.getByLabel("Tracked TDoc favourites");
   await expect(rail.getByText("S3-264202")).toBeVisible();
-  await rail.getByText("S3-264203").click();
+  await expect(rail.getByText("S3-264203")).toHaveCount(0);
 
   const detailPanel = page.getByLabel("Detail for S3-264203");
-  await expect(detailPanel.getByText("Revised CR")).toBeVisible();
-  await expect(detailPanel.getByRole("button", { name: /Track/ })).toBeVisible();
-
   await page
     .getByRole("button", { name: /S3-264203 Revised CR agreed/ })
     .click();
-  await expect(detailPanel).toBeVisible();
+  await expect(detailPanel.getByText("Revised CR")).toBeVisible();
+  await expect(detailPanel.getByRole("button", { name: /Track/ })).toBeVisible();
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   await expect(

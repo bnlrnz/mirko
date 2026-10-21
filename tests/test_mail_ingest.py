@@ -264,6 +264,32 @@ def test_eml_directory_ingest_is_incremental(tmp_path: Path) -> None:
     assert third.new_messages == 1
 
 
+def test_single_eml_file_ingest_is_incremental(tmp_path: Path) -> None:
+    eml_file = tmp_path / "inbox.eml"
+    eml_file.write_bytes(
+        make_message(
+            message_id="single@example.org",
+            subject="[SA3#130][S3-264501] Single EML message",
+            body="Single file body.",
+        ).as_bytes()
+    )
+    folder = MeetingFolder.create(
+        tmp_path / "SA3-130",
+        base_config({"kind": "eml", "eml_dir": str(eml_file)}),
+    )
+    ingestor = MailIngestor(folder, clock=lambda: NOW)
+
+    first = ingestor.ingest()
+    second = ingestor.ingest()
+
+    assert first.kind == "eml"
+    assert first.path == str(eml_file)
+    assert first.new_messages == 1
+    assert first.mentions == 1
+    assert second.new_messages == 0
+    assert second.examined == 0
+
+
 def test_bad_message_does_not_stop_ingest(tmp_path: Path) -> None:
     folder, mbox_path = make_mbox_folder(tmp_path)
     write_mbox(

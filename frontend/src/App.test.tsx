@@ -31,15 +31,21 @@ function installFetch() {
       const method = init?.method ?? "GET";
       if (url === "/api/meeting") return json(meeting);
       if (url === "/api/settings" && method === "GET") return json(settings);
+      if (url === "/api/status" && method === "PUT") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return json(body);
+      }
       if (url === "/api/settings" && method === "PUT") {
         const body = JSON.parse(String(init?.body ?? "{}"));
         return json({
           ...settings,
           source: { ...settings.source, host: body.host },
+          mail: body.mail,
           lazy_drafts: body.lazy_drafts,
           auto_sync: body.auto_sync,
           meeting_interval_s: body.meeting_interval_s,
           idle_interval_s: body.idle_interval_s,
+          bar_color: body.bar_color,
         });
       }
       if (url.startsWith("/api/import/excel")) {
@@ -96,7 +102,9 @@ function installFetch() {
           finalized_at: "2026-10-16T15:00:00Z",
         });
       }
-      if (url === "/api/tdocs?state=agreed") return json([tdocs[1]]);
+      if (url === "/api/tdocs?tracked=true") {
+        return json(tdocs.filter((item) => item.is_tracked));
+      }
       if (url === "/api/tdocs") return json(tdocs);
       if (url === "/api/drafts/1") return json(draft);
       if (url === "/api/tdocs/S3-264203") {
@@ -132,11 +140,13 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("SA3#130 Prague")).toBeInTheDocument();
-    const rail = screen.getByLabelText("Tracked TDocs and filters");
-    expect(within(rail).getByLabelText("Search TDocs")).toBeInTheDocument();
+    const rail = screen.getByLabelText("Tracked TDoc favourites");
     expect(within(rail).getByText("S3-264202")).toBeInTheDocument();
-    expect(within(rail).getByLabelText("Include Drafts")).toBeChecked();
-    expect(within(rail).queryByText("Include ephemeral")).not.toBeInTheDocument();
+    expect(within(rail).queryByText("S3-264203")).not.toBeInTheDocument();
+    expect(
+      within(rail).getByTitle(/New file for S3-264202/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Include Drafts")).toBeChecked();
     expect(screen.getByLabelText("TDoc detail")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Lineage" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Timeline" })).toBeInTheDocument();
@@ -149,8 +159,9 @@ describe("App", () => {
 
   it("selects a TDoc and shows its detail and timeline", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
-    fireEvent.click(within(rail).getByText("S3-264203"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /S3-264203 Revised CR agreed/ }),
+    );
 
     const panel = await screen.findByLabelText("Detail for S3-264203");
     expect(within(panel).getByText("Revised CR")).toBeInTheDocument();
@@ -168,26 +179,34 @@ describe("App", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("focuses the lineage when a filtered TDoc is double-clicked", async () => {
+  it("focuses the lineage when a favourite is double-clicked", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
-    fireEvent.doubleClick(within(rail).getByText("S3-264203"));
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
+    fireEvent.doubleClick(within(rail).getByText("S3-264202"));
 
     const canvas = screen.getByTestId("lineage-scroll");
     await waitFor(() => expect(canvas.scrollLeft).toBeGreaterThan(0));
   });
 
-  it("applies state filters through the API", async () => {
+  it("filters lineage nodes by category without changing favourites", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.change(screen.getByLabelText("State filter"), {
       target: { value: "agreed" },
     });
 
     await waitFor(() => {
-      expect(within(rail).queryByText("S3-264202")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", {
+          name: /S3-264202 Original CR revised/,
+        }),
+      ).not.toBeInTheDocument();
     });
-    expect(within(rail).getByText("S3-264203")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /S3-264203 Revised CR agreed/ }),
+    ).toBeInTheDocument();
+    expect(within(rail).getByText("S3-264202")).toBeInTheDocument();
+    expect(within(rail).queryByText("S3-264203")).not.toBeInTheDocument();
   });
 
   it("shows the user action log", async () => {
@@ -195,7 +214,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /Log/ }));
     const list = await screen.findByLabelText("User action log");
     expect(within(list).getByText("note created")).toBeInTheDocument();
-    expect(within(list).getByText("[Support] Support this CR.")).toBeInTheDocument();
+    expect(within(list).getByText("Support this CR.")).toBeInTheDocument();
     fireEvent.click(
       within(list).getAllByRole("button", { name: "S3-264202" })[0],
     );
@@ -204,10 +223,16 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides drafts through the Include Drafts filter", async () => {
+  it("hides drafts in the lineage without hiding them from details", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
-    fireEvent.click(within(rail).getByLabelText("Include Drafts"));
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    expect(
+      within(panel).getByRole("link", { name: "draft S3-264202-r1.docx" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Include Drafts"));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.map((call) => String(call[0])),
@@ -215,6 +240,9 @@ describe("App", () => {
         "/api/lineage?tracked=false&include_inactive=false&include_drafts=false",
       );
     });
+    expect(
+      within(panel).getByRole("link", { name: "draft S3-264202-r1.docx" }),
+    ).toBeInTheDocument();
   });
 
   it("tracks a TDoc from the left rail star", async () => {
@@ -291,7 +319,7 @@ describe("App", () => {
       expect(within(tab).getByText("1")).toBeInTheDocument();
     });
 
-    const rail = screen.getByLabelText("Tracked TDocs and filters");
+    const rail = screen.getByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
     await waitFor(() => {
       expect(within(tab).queryByText("1")).not.toBeInTheDocument();
@@ -373,7 +401,7 @@ describe("App", () => {
 
   it("adds a manual lineage link from the detail panel", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
     const panel = await screen.findByLabelText("Detail for S3-264202");
 
@@ -388,13 +416,37 @@ describe("App", () => {
 
   it("deletes a note from the detail panel", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
     const panel = await screen.findByLabelText("Detail for S3-264202");
     fireEvent.click(within(panel).getByRole("button", { name: "delete" }));
     await waitFor(() =>
       expect(within(panel).getByRole("button", { name: "delete" })).toBeInTheDocument(),
     );
+  });
+
+  it("sets a TDoc status separately from its notes", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    expect(within(panel).getByLabelText("Status")).toHaveValue("Support");
+    expect(within(panel).queryByLabelText("Position tag")).not.toBeInTheDocument();
+    fireEvent.change(within(panel).getByLabelText("Status"), {
+      target: { value: "Object" },
+    });
+    await waitFor(() => {
+      const statusCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === "/api/status" &&
+          call[1]?.method === "PUT",
+      );
+      expect(JSON.parse(String(statusCall?.[1]?.body))).toEqual({
+        target_kind: "tdoc",
+        target_ref: "S3-264202",
+        status: "Object",
+      });
+    });
   });
 
   it("colors lineage nodes by state and marks tracked nodes with a star", async () => {
@@ -404,7 +456,7 @@ describe("App", () => {
     });
     expect(original).toHaveClass("state-merged", "tracked");
     expect(within(original).getByText("★")).toBeInTheDocument();
-    expect(within(original).getByTestId("note-badge-S3-264202")).toBeInTheDocument();
+    expect(within(original).getByTestId("status-badge-S3-264202")).toBeInTheDocument();
     const revised = screen.getByRole("button", {
       name: /S3-264203 Revised CR agreed/,
     });
@@ -414,7 +466,7 @@ describe("App", () => {
 
   it("shows the FTP upload timestamp for artifacts", async () => {
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
     const panel = await screen.findByLabelText("Detail for S3-264202");
     expect(
@@ -441,6 +493,8 @@ describe("App", () => {
       attached_to: "S3-264202",
       artifact_id: 1,
       status: "present",
+      notes_count: 1,
+      node_status: "Clarify",
     };
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).startsWith("/api/lineage")) {
@@ -464,11 +518,13 @@ describe("App", () => {
     });
 
     render(<App />);
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: /draft draft S3-264202-r1.docx for S3-264202 present/,
-      }),
-    );
+    const draftButton = await screen.findByRole("button", {
+      name: /draft draft S3-264202-r1.docx for S3-264202 present/,
+    });
+    expect(
+      within(draftButton).getByTestId("status-badge-draft:1"),
+    ).toBeInTheDocument();
+    fireEvent.click(draftButton);
     const panel = await screen.findByLabelText(
       "Detail for draft draft S3-264202-r1.docx",
     );
@@ -484,6 +540,21 @@ describe("App", () => {
     expect(
       within(panel).queryByRole("link", { name: /S3-264203\.zip/ }),
     ).not.toBeInTheDocument();
+    fireEvent.change(within(panel).getByLabelText("Status"), {
+      target: { value: "Object" },
+    });
+    await waitFor(() => {
+      const statusCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === "/api/status" &&
+          call[1]?.method === "PUT",
+      );
+      expect(JSON.parse(String(statusCall?.[1]?.body))).toEqual({
+        target_kind: "draft",
+        target_ref: "1",
+        status: "Object",
+      });
+    });
     fireEvent.change(within(panel).getByLabelText("New note"), {
       target: { value: "Draft needs a title fix." },
     });
@@ -494,7 +565,7 @@ describe("App", () => {
           String(call[0]) === "/api/notes" &&
           call[1]?.method === "POST",
       );
-      expect(JSON.parse(String(noteCall?.[1]?.body))).toMatchObject({
+      expect(JSON.parse(String(noteCall?.[1]?.body))).toEqual({
         target_kind: "draft",
         target_ref: "1",
         body: "Draft needs a title fix.",
@@ -519,7 +590,7 @@ describe("App", () => {
     });
 
     render(<App />);
-    const rail = await screen.findByLabelText("Tracked TDocs and filters");
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
 
     await waitFor(() =>
@@ -534,6 +605,22 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     const dialog = await screen.findByRole("dialog", { name: "Meeting settings" });
 
+    expect(
+      within(dialog).queryByRole("button", { name: "Close" }),
+    ).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Mail mbox path")).toHaveValue(
+      "/home/ben/mail/sa3-130.mbox",
+    );
+    expect(within(dialog).getByLabelText("Bar color")).toHaveValue("#ffffff");
+    fireEvent.change(within(dialog).getByLabelText("Bar color"), {
+      target: { value: "#2457c5" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Mail source kind"), {
+      target: { value: "eml" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Mail EML path"), {
+      target: { value: "/tmp/sa3-130-mail" },
+    });
     fireEvent.change(within(dialog).getByLabelText("Source host"), {
       target: { value: "10.10.10.12" },
     });
@@ -562,6 +649,12 @@ describe("App", () => {
       meeting_interval_s: 30,
       idle_interval_s: 600,
       lazy_drafts: false,
+      bar_color: "#2457c5",
+      mail: {
+        kind: "eml",
+        path: null,
+        eml_dir: "/tmp/sa3-130-mail",
+      },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));

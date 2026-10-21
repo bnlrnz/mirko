@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LineageView, chainDrafts, layoutLineage } from "./LineageView";
@@ -12,6 +12,82 @@ describe("LineageView", () => {
     const [first, second] = layout.nodes;
     expect(first.lane).toBe(second.lane);
     expect(second.depth).toBeGreaterThan(first.depth);
+  });
+
+  it("orders root lanes by the supplied favourite order", () => {
+    const base = lineage.nodes[0];
+    const nodes = ["S3-264300", "S3-264301", "S3-264302"].map(
+      (tdoc_number) => ({ ...base, tdoc_number }),
+    );
+    const layout = layoutLineage(
+      { nodes, edges: [] },
+      ["S3-264301", "S3-264302", "S3-264300"],
+    );
+    const lanes = layout.nodes.map((node) => [node.tdoc_number, node.lane]);
+    expect(lanes).toEqual([
+      ["S3-264301", 0],
+      ["S3-264302", 1],
+      ["S3-264300", 2],
+    ]);
+  });
+
+  it("starts a merge lane behind the revised baseline", () => {
+    const base = lineage.nodes[0];
+    const merged = { ...base, tdoc_number: "S3-264300", agenda_item: "1" };
+    const baseline = { ...base, tdoc_number: "S3-264301", agenda_item: "2" };
+    const target = { ...base, tdoc_number: "S3-264302", agenda_item: "3" };
+    const layout = layoutLineage({
+      nodes: [merged, baseline, target],
+      edges: [
+        {
+          source: "S3-264300",
+          target: "S3-264302",
+          kind: "merged_into",
+          confidence: 1,
+          verified: true,
+          source_ref: null,
+        },
+        {
+          source: "S3-264301",
+          target: "S3-264302",
+          kind: "revision_of",
+          confidence: 1,
+          verified: true,
+          source_ref: null,
+        },
+      ],
+    });
+    const lanes = new Map(
+      layout.nodes.map((node) => [node.tdoc_number, node.lane]),
+    );
+    expect(lanes.get("S3-264301")).toBe(1);
+    expect(lanes.get("S3-264302")).toBe(1);
+    expect(lanes.get("S3-264302")).not.toBe(lanes.get("S3-264300"));
+  });
+
+  it("filters visible nodes by the lineage categories", () => {
+    render(
+      <LineageView
+        lineage={lineage}
+        selected={null}
+        filters={{
+          agenda: "",
+          type: "",
+          state: "agreed",
+          source: "",
+          tracked: false,
+          includeEphemeral: true,
+        }}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("1 nodes")).toBeInTheDocument();
+    expect(screen.queryByText("S3-264202")).not.toBeInTheDocument();
+    expect(screen.getByText("S3-264203")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("edge-S3-264202-S3-264203"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
   });
 
   it("renders nodes, edges and selection", () => {
@@ -88,7 +164,14 @@ describe("LineageView", () => {
       <LineageView
         lineage={withDraft}
         selected={null}
-        includeDrafts
+        filters={{
+          agenda: "",
+          type: "",
+          state: "",
+          source: "",
+          tracked: false,
+          includeEphemeral: true,
+        }}
         onSelect={onSelect}
         onSelectDraft={onSelectDraft}
         newArtifactPaths={
@@ -121,7 +204,14 @@ describe("LineageView", () => {
       <LineageView
         lineage={withDraft}
         selected={null}
-        includeDrafts={false}
+        filters={{
+          agenda: "",
+          type: "",
+          state: "",
+          source: "",
+          tracked: false,
+          includeEphemeral: false,
+        }}
         onSelect={onSelect}
       />,
     );
@@ -214,57 +304,131 @@ describe("LineageView", () => {
     expect(depth.get("S3-264203")).toBeGreaterThan(depth.get("draft:2") ?? 0);
   });
 
-  it("renders note badges for the latest note type", () => {
-    const badges = ["Support", "Object", "Clarify", "note", null].map(
-      (note_badge, index) => ({
-        ...lineage.nodes[0],
-        tdoc_number: `S3-26420${index + 2}`,
-        note_badge,
-      }),
-    );
+  it("renders status and note badges with status taking visual precedence", () => {
+    const nodes = [
+      { node_status: "Support" as const, notes_count: 1 },
+      { node_status: "Object" as const, notes_count: 2 },
+      { node_status: "Clarify" as const, notes_count: 0 },
+      { node_status: null, notes_count: 1 },
+      { node_status: null, notes_count: 0 },
+    ].map((fields, index) => ({
+      ...lineage.nodes[0],
+      tdoc_number: `S3-26420${index + 2}`,
+      ...fields,
+    }));
     render(
       <LineageView
-        lineage={{ nodes: badges, edges: [] }}
+        lineage={{ nodes, edges: [] }}
         selected={null}
         onSelect={vi.fn()}
       />,
     );
     expect(
-      screen.getByTestId("note-badge-S3-264202").querySelector("svg"),
-    ).toHaveClass("note-badge-support");
+      screen.getByTestId("status-badge-S3-264202").querySelector("svg"),
+    ).toHaveClass("status-badge-support");
     expect(
-      screen.getByTestId("note-badge-S3-264203").querySelector("svg"),
-    ).toHaveClass("note-badge-object");
+      screen.getByTestId("status-badge-S3-264203").querySelector("svg"),
+    ).toHaveClass("status-badge-object");
     expect(
-      screen.getByTestId("note-badge-S3-264204").querySelector("svg"),
-    ).toHaveClass("note-badge-clarify");
+      screen.getByTestId("status-badge-S3-264204").querySelector("svg"),
+    ).toHaveClass("status-badge-clarify");
     expect(
       screen.getByTestId("note-badge-S3-264205").querySelector("svg"),
-    ).toHaveClass("note-badge-icon");
+    ).toHaveClass("note-badge");
     expect(
       screen.queryByTestId("note-badge-S3-264206"),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByTestId("note-badge-S3-264202").querySelector("rect"),
+      screen.queryByTestId("status-badge-S3-264203"),
+    ).not.toHaveTextContent("2 notes");
+    expect(
+      screen.getByTestId("status-badge-S3-264202").querySelector("rect"),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByTestId("note-badge-S3-264202").querySelectorAll("path"),
+      screen.getByTestId("status-badge-S3-264202").querySelectorAll("path"),
     ).toHaveLength(1);
     expect(
       screen.getByRole("button", { name: /S3-264202 Original CR/ }),
-    ).toHaveClass("note-tint-support");
+    ).toHaveClass("status-tint-support");
     expect(
       screen.getByRole("button", { name: /S3-264203 Original CR/ }),
-    ).toHaveClass("note-tint-object");
+    ).toHaveClass("status-tint-object");
     expect(
       screen.getByRole("button", { name: /S3-264204 Original CR/ }),
-    ).toHaveClass("note-tint-clarify");
+    ).toHaveClass("status-tint-clarify");
     expect(
       screen.getByRole("button", { name: /S3-264205 Original CR/ }),
     ).toHaveClass("note-tint-note");
     expect(
       screen.getByRole("button", { name: /S3-264206 Original CR/ }),
     ).not.toHaveClass("note-tint-note");
+  });
+
+  it("shows status and note badges on draft nodes", () => {
+    const withDraft: Lineage = {
+      ...lineage,
+      nodes: [
+        ...lineage.nodes,
+        {
+          ...lineage.nodes[0],
+          tdoc_number: "draft:1",
+          title: "draft S3-264202-r1.docx",
+          decision: "present",
+          node_kind: "draft",
+          attached_to: "S3-264202",
+          artifact_id: 1,
+          logical_path: "Inbox/Drafts/draft S3-264202-r1.docx",
+          status: "present",
+          notes_count: 2,
+          node_status: "Object",
+        },
+        {
+          ...lineage.nodes[0],
+          tdoc_number: "draft:2",
+          title: "draft S3-264202-r2.docx",
+          decision: "present",
+          node_kind: "draft",
+          attached_to: "S3-264202",
+          artifact_id: 2,
+          logical_path: "Inbox/Drafts/draft S3-264202-r2.docx",
+          status: "present",
+          notes_count: 1,
+          node_status: null,
+        },
+      ],
+    };
+    render(
+      <LineageView
+        lineage={withDraft}
+        selected={null}
+        filters={{
+          agenda: "",
+          type: "",
+          state: "",
+          source: "",
+          tracked: false,
+          includeEphemeral: true,
+        }}
+        onSelect={vi.fn()}
+        onSelectDraft={vi.fn()}
+      />,
+    );
+    const draft = screen.getByRole("button", {
+      name: /draft draft S3-264202-r1.docx for S3-264202 present/,
+    });
+    expect(draft).toHaveClass("status-tint-object");
+    expect(
+      within(draft).getByTestId("status-badge-draft:1").querySelector("svg"),
+    ).toHaveClass("status-badge-object");
+    expect(within(draft).queryByTestId("note-badge-draft:1")).not.toBeInTheDocument();
+
+    const noteDraft = screen.getByRole("button", {
+      name: /draft draft S3-264202-r2.docx for S3-264202 present/,
+    });
+    expect(noteDraft).toHaveClass("note-tint-note");
+    expect(
+      within(noteDraft).getByTestId("note-badge-draft:2"),
+    ).toBeInTheDocument();
   });
 
   it("toggles tracking when a node is double-clicked", () => {

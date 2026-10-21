@@ -33,6 +33,7 @@ EXPECTED_TABLES = {
     "email",
     "email_mention",
     "user_action",
+    "node_status",
 }
 
 EXPECTED_INDICES = {
@@ -52,6 +53,7 @@ EXPECTED_INDICES = {
     "idx_sync_state_due",
     "idx_user_action_created",
     "idx_user_action_target",
+    "idx_node_status_target",
 }
 
 
@@ -64,12 +66,13 @@ def names(connection: sqlite3.Connection, kind: str) -> set[str]:
 
 def test_discover_migrations_is_numbered_and_ordered() -> None:
     migrations = discover_migrations()
-    assert [migration.version for migration in migrations] == [1, 2, 3, 4]
+    assert [migration.version for migration in migrations] == [1, 2, 3, 4, 5]
     assert [migration.name for migration in migrations] == [
         "initial",
         "projection_views",
         "lazy_manifest",
         "user_action",
+        "node_status",
     ]
 
 
@@ -77,13 +80,55 @@ def test_apply_migrations_on_empty_database(tmp_path: Path) -> None:
     connection = connect(tmp_path / "mirko.sqlite", migrate=False)
     try:
         assert schema_version(connection) == 0
-        assert apply_migrations(connection) == [1, 2, 3, 4]
-        assert schema_version(connection) == 4
+        assert apply_migrations(connection) == [1, 2, 3, 4, 5]
+        assert schema_version(connection) == 5
         rows = connection.execute(
             "SELECT version, applied_at FROM schema_migration ORDER BY version"
         ).fetchall()
-        assert [row["version"] for row in rows] == [1, 2, 3, 4]
+        assert [row["version"] for row in rows] == [1, 2, 3, 4, 5]
         assert all(row["applied_at"] for row in rows)
+    finally:
+        connection.close()
+
+
+def test_node_status_migration_extracts_latest_note_tag(tmp_path: Path) -> None:
+    migrations = discover_migrations()
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    for migration in migrations:
+        if migration.version <= 4:
+            (directory / migration.path.name).write_text(
+                migration.sql, encoding="utf-8"
+            )
+
+    connection = connect(tmp_path / "mirko.sqlite", migrate=False)
+    try:
+        assert apply_migrations(connection, directory) == [1, 2, 3, 4]
+        connection.execute(
+            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
+            "author, source, created_at, updated_at) VALUES "
+            "('tdoc', 'S3-264202', 'Older.', 'Clarify', 'ben', 'user', "
+            "'2026-10-16T13:00:00.000000Z', '2026-10-16T13:00:00.000000Z')"
+        )
+        connection.execute(
+            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
+            "author, source, created_at, updated_at) VALUES "
+            "('tdoc', 'S3-264202', 'Latest.', 'Support', 'ben', 'user', "
+            "'2026-10-16T14:00:00.000000Z', '2026-10-16T14:00:00.000000Z')"
+        )
+        connection.commit()
+
+        assert apply_migrations(connection) == [5]
+        status = connection.execute(
+            "SELECT status FROM node_status WHERE target_kind = 'tdoc' "
+            "AND target_ref = 'S3-264202'"
+        ).fetchone()
+        assert status["status"] == "Support"
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(note)")
+        }
+        assert "position_tag" not in columns
     finally:
         connection.close()
 
@@ -94,7 +139,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
         assert apply_migrations(connection) == []
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 4
+        ).fetchone()[0] == 5
     finally:
         connection.close()
 
@@ -105,7 +150,7 @@ def test_connect_sets_pragmas_and_schema(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert schema_version(connection) == 4
+        assert schema_version(connection) == 5
     finally:
         connection.close()
 

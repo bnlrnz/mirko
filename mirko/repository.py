@@ -134,6 +134,7 @@ def get_tdoc(connection: sqlite3.Connection, tdoc_number: str) -> dict | None:
             (tdoc_number,),
         )
     ]
+    data["node_status"] = _status_for(connection, "tdoc", tdoc_number)
     data["notes"] = [
         _note_row(note)
         for note in connection.execute(
@@ -201,6 +202,7 @@ def get_draft(connection: sqlite3.Connection, artifact_id: int) -> dict | None:
         "first_seen_at": row["first_seen_at"],
         "last_seen_at": row["last_seen_at"],
     }
+    data["node_status"] = _status_for(connection, "draft", str(artifact_id))
     data["notes"] = [
         _note_row(note)
         for note in connection.execute(
@@ -212,13 +214,22 @@ def get_draft(connection: sqlite3.Connection, artifact_id: int) -> dict | None:
     return data
 
 
+def _status_for(
+    connection: sqlite3.Connection, target_kind: str, target_ref: str
+) -> str | None:
+    row = connection.execute(
+        "SELECT status FROM node_status WHERE target_kind = ? AND target_ref = ?",
+        (target_kind, target_ref),
+    ).fetchone()
+    return row["status"] if row is not None else None
+
+
 def _note_row(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "target_kind": row["target_kind"],
         "target_ref": row["target_ref"],
         "body": row["body"],
-        "position_tag": row["position_tag"],
         "author": row["author"],
         "source": row["source"],
         "created_at": row["created_at"],
@@ -334,7 +345,7 @@ def timeline(connection: sqlite3.Connection, tdoc_number: str) -> list[dict]:
             {
                 "kind": "note",
                 "occurred_at": note["created_at"],
-                "title": note["position_tag"] or "Note",
+                "title": "Note",
                 "detail": note["body"],
                 "source": note["source"],
                 "artifact_id": None,
@@ -430,14 +441,14 @@ def lineage(
         placeholders = ", ".join("?" for _ in node_ids)
         rows = connection.execute(
             "SELECT t.tdoc_number, t.title, t.decision, t.state_source, "
-            "t.agenda_item, t.type, t.is_tracked, t.is_provisional, "
+            "t.agenda_item, t.type, t.source, t.is_tracked, t.is_provisional, "
             "t.first_seen_at, "
             "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'tdoc' "
             "AND n.target_ref = t.tdoc_number) AS notes_count, "
-            "(SELECT n.position_tag FROM note n WHERE n.target_kind = 'tdoc' "
-            "AND n.target_ref = t.tdoc_number AND n.position_tag IS NOT NULL "
-            "ORDER BY n.created_at DESC, n.id DESC LIMIT 1) AS note_tag "
-            "FROM tdoc t WHERE t.tdoc_number IN ({placeholders}) "
+            "ns.status AS node_status "
+            "FROM tdoc t LEFT JOIN node_status ns "
+            "ON ns.target_kind = 'tdoc' AND ns.target_ref = t.tdoc_number "
+            "WHERE t.tdoc_number IN ({placeholders}) "
             "ORDER BY COALESCE(t.agenda_item, ''), t.tdoc_number".format(
                 placeholders=placeholders
             ),
@@ -451,11 +462,12 @@ def lineage(
                 "state_source": row["state_source"],
                 "agenda_item": row["agenda_item"],
                 "type": row["type"],
+                "source": row["source"],
                 "is_tracked": bool(row["is_tracked"]),
                 "is_provisional": bool(row["is_provisional"]),
                 "first_seen_at": row["first_seen_at"],
-                "note_badge": row["note_tag"]
-                or ("note" if row["notes_count"] else None),
+                "notes_count": int(row["notes_count"]),
+                "node_status": row["node_status"],
             }
             for row in rows
         ]
@@ -468,8 +480,13 @@ def lineage(
     if include_drafts and existing_ids:
         drafts = connection.execute(
             "SELECT a.id, a.tdoc_number, a.filename, a.logical_path, a.status, "
-            "a.first_seen_at, a.remote_mtime, t.agenda_item, t.is_tracked "
+            "a.first_seen_at, a.remote_mtime, t.agenda_item, t.is_tracked, "
+            "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'draft' "
+            "AND n.target_ref = CAST(a.id AS TEXT)) AS notes_count, "
+            "ns.status AS node_status "
             "FROM artifact a JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
+            "LEFT JOIN node_status ns "
+            "ON ns.target_kind = 'draft' AND ns.target_ref = CAST(a.id AS TEXT) "
             "WHERE a.kind = 'working_draft' "
             "ORDER BY a.tdoc_number, a.first_seen_at, a.id"
         )
@@ -488,6 +505,8 @@ def lineage(
                     "is_tracked": bool(draft["is_tracked"]),
                     "is_provisional": False,
                     "first_seen_at": draft["first_seen_at"],
+                    "notes_count": int(draft["notes_count"]),
+                    "node_status": draft["node_status"],
                     "node_kind": "draft",
                     "attached_to": draft["tdoc_number"],
                     "artifact_id": int(draft["id"]),
@@ -960,32 +979,71 @@ def set_tracked(
     return bool(value)
 
 
+NODE_STATUSES = ("Support", "Object", "Clarify")
+
+
+def set_node_status(
+    connection: sqlite3.Connection,
+    *,
+    target_kind: str,
+    target_ref: str,
+    status: str | None,
+) -> str | None:
+    if status is not None and status not in NODE_STATUSES:
+        raise ValueError(f"unsupported status: {status}")
+    if status is None:
+        connection.execute(
+            "DELETE FROM node_status WHERE target_kind = ? AND target_ref = ?",
+            (target_kind, target_ref),
+        )
+        action = "status_cleared"
+        detail = None
+    else:
+        connection.execute(
+            "INSERT INTO node_status(target_kind, target_ref, status, updated_at) "
+            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) "
+            "ON CONFLICT(target_kind, target_ref) DO UPDATE SET "
+            "status = excluded.status, updated_at = excluded.updated_at",
+            (target_kind, target_ref, status),
+        )
+        action = "status_set"
+        detail = status
+    _record_action(
+        connection,
+        action,
+        target_kind=target_kind,
+        target_ref=target_ref,
+        detail=detail,
+    )
+    connection.commit()
+    return _status_for(connection, target_kind, target_ref)
+
+
 def add_note(
     connection: sqlite3.Connection,
     *,
     target_kind: str,
     target_ref: str,
     body: str,
-    position_tag: str | None = None,
     author: str | None = None,
     source: str = "user",
 ) -> dict:
     cursor = connection.execute(
-        "INSERT INTO note(target_kind, target_ref, body, position_tag, author, "
-        "source) VALUES (?, ?, ?, ?, ?, ?)",
-        (target_kind, target_ref, body, position_tag, author, source),
+        "INSERT INTO note(target_kind, target_ref, body, author, source) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (target_kind, target_ref, body, author, source),
     )
     _record_action(
         connection,
         "note_created",
         target_kind=target_kind,
         target_ref=target_ref,
-        detail=f"[{position_tag}] {body}" if position_tag else body,
+        detail=body,
     )
     connection.commit()
     row = connection.execute(
-        "SELECT id, target_kind, target_ref, body, position_tag, author, "
-        "source, created_at, updated_at FROM note WHERE id = ?",
+        "SELECT id, target_kind, target_ref, body, author, source, "
+        "created_at, updated_at FROM note WHERE id = ?",
         (cursor.lastrowid,),
     ).fetchone()
     return _note_row(row)
@@ -1314,7 +1372,6 @@ def update_note(
     note_id: int,
     *,
     body: str | None = None,
-    position_tag: str | None = None,
 ) -> dict | None:
     row = connection.execute(
         "SELECT * FROM note WHERE id = ?", (note_id,)
@@ -1326,9 +1383,6 @@ def update_note(
     if body is not None:
         sets.append("body = ?")
         params.append(body)
-    if position_tag is not None:
-        sets.append("position_tag = ?")
-        params.append(position_tag)
     if sets:
         sets.append("updated_at = ?")
         params.append(
@@ -1346,11 +1400,7 @@ def update_note(
             "note_updated",
             target_kind=updated["target_kind"],
             target_ref=updated["target_ref"],
-            detail=(
-                f"[{updated['position_tag']}] {updated['body']}"
-                if updated["position_tag"]
-                else updated["body"]
-            ),
+            detail=updated["body"],
         )
         connection.commit()
         row = connection.execute(

@@ -6,13 +6,15 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Lineage, LineageEdge, LineageNode } from "../types";
+import type { Filters, Lineage, LineageEdge, LineageNode } from "../types";
 
 interface Props {
   lineage: Lineage;
   selected: string | null;
   selectedDraft?: number | null;
-  includeDrafts?: boolean;
+  filters?: Filters;
+  onFilters?: (filters: Filters) => void;
+  nodeOrder?: readonly string[];
   onSelect: (tdoc: string, artifactId?: number) => void;
   onSelectDraft?: (artifactId: number) => void;
   focusRequest?: { tdoc: string; nonce: number } | null;
@@ -37,6 +39,14 @@ const DRAFT_ORDER = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
+const EMPTY_FILTERS: Filters = {
+  agenda: "",
+  type: "",
+  state: "",
+  source: "",
+  tracked: false,
+  includeEphemeral: true,
+};
 
 function draftSortKey(node: LineageNode): string {
   return node.remote_mtime ?? node.first_seen_at ?? "";
@@ -137,7 +147,10 @@ export function chainDrafts(lineage: Lineage): Lineage {
   return { nodes: lineage.nodes, edges };
 }
 
-export function layoutLineage(lineage: Lineage): {
+export function layoutLineage(
+  lineage: Lineage,
+  nodeOrder: readonly string[] = [],
+): {
   nodes: PositionedNode[];
   width: number;
   height: number;
@@ -175,10 +188,17 @@ export function layoutLineage(lineage: Lineage): {
     }
   }
 
+  const order = new Map(nodeOrder.map((id, index) => [id, index]));
   const ordered = [...lineage.nodes].sort((a, b) => {
     const depthDelta = (depth.get(a.tdoc_number) ?? 0) - (depth.get(b.tdoc_number) ?? 0);
     if (depthDelta !== 0) {
       return depthDelta;
+    }
+    const orderDelta =
+      (order.get(a.tdoc_number) ?? Number.MAX_SAFE_INTEGER) -
+      (order.get(b.tdoc_number) ?? Number.MAX_SAFE_INTEGER);
+    if (orderDelta !== 0) {
+      return orderDelta;
     }
     const agenda = (a.agenda_item ?? "").localeCompare(b.agenda_item ?? "");
     return agenda !== 0 ? agenda : a.tdoc_number.localeCompare(b.tdoc_number);
@@ -187,7 +207,12 @@ export function layoutLineage(lineage: Lineage): {
   const laneOf = new Map<string, number>();
   let laneCount = 0;
   for (const node of ordered) {
-    const predecessors = (incoming.get(node.tdoc_number) ?? [])
+    const incomingEdges = incoming.get(node.tdoc_number) ?? [];
+    const baselineEdges = incomingEdges.filter(
+      (edge) => edge.kind === "revision_of",
+    );
+    const preferredEdges = baselineEdges.length > 0 ? baselineEdges : incomingEdges;
+    const predecessors = preferredEdges
       .map((edge) => laneOf.get(edge.source))
       .filter((lane): lane is number => lane !== undefined);
     const lane = predecessors.length
@@ -258,36 +283,33 @@ function decisionClass(node: LineageNode): string {
   return STATE_CLASSES[decision] ?? "state-idle";
 }
 
-function noteBadgeClass(tag: string | null | undefined): string {
-  const normalized = (tag ?? "").trim().toLowerCase();
+function statusBadgeClass(status: string | null | undefined): string {
+  const normalized = (status ?? "").trim().toLowerCase();
   if (normalized === "object") {
-    return "note-badge-object";
+    return "status-badge-object";
   }
   if (normalized === "support") {
-    return "note-badge-support";
+    return "status-badge-support";
   }
   if (normalized === "clarify") {
-    return "note-badge-clarify";
+    return "status-badge-clarify";
   }
   return "";
 }
 
-function noteTintClass(tag: string | null | undefined): string {
-  const normalized = (tag ?? "").trim().toLowerCase();
-  if (normalized === "object") {
-    return "note-tint-object";
-  }
-  if (normalized === "support") {
-    return "note-tint-support";
-  }
-  if (normalized === "clarify") {
-    return "note-tint-clarify";
-  }
-  return normalized ? "note-tint-note" : "";
+function hasNodeBadge(node: LineageNode): boolean {
+  return Boolean(node.node_status) || (node.notes_count ?? 0) > 0;
 }
 
-function noteBadgeIcon(tag: string | null | undefined) {
-  const normalized = (tag ?? "").trim().toLowerCase();
+function nodeTintClass(node: LineageNode): string {
+  if (node.node_status) {
+    return `status-tint-${node.node_status.toLowerCase()}`;
+  }
+  return (node.notes_count ?? 0) > 0 ? "note-tint-note" : "";
+}
+
+function nodeBadgeIcon(status: string | null | undefined) {
+  const normalized = (status ?? "").trim().toLowerCase();
   if (normalized === "object") {
     return faXmark;
   }
@@ -300,6 +322,54 @@ function noteBadgeIcon(tag: string | null | undefined) {
   return faNoteSticky;
 }
 
+function uniqueOptions(values: (string | null | undefined)[]): string[] {
+  return [...new Set(values.filter((value): value is string => !!value))].sort();
+}
+
+function filterMatches(node: LineageNode, filters: Filters): boolean {
+  if (filters.agenda && node.agenda_item !== filters.agenda) {
+    return false;
+  }
+  if (filters.type && node.type !== filters.type) {
+    return false;
+  }
+  if (filters.state && node.decision !== filters.state) {
+    return false;
+  }
+  if (filters.source && node.source !== filters.source) {
+    return false;
+  }
+  return true;
+}
+
+function filterLineage(lineage: Lineage, filters: Filters): Lineage {
+  const active =
+    filters.agenda || filters.type || filters.state || filters.source;
+  if (!active) {
+    return lineage;
+  }
+  const keptTdocs = new Set(
+    lineage.nodes
+      .filter(
+        (node) =>
+          node.node_kind !== "draft" && filterMatches(node, filters),
+      )
+      .map((node) => node.tdoc_number),
+  );
+  const nodes = lineage.nodes.filter((node) =>
+    node.node_kind === "draft"
+      ? Boolean(node.attached_to && keptTdocs.has(node.attached_to))
+      : keptTdocs.has(node.tdoc_number),
+  );
+  const ids = new Set(nodes.map((node) => node.tdoc_number));
+  return {
+    nodes,
+    edges: lineage.edges.filter(
+      (edge) => ids.has(edge.source) && ids.has(edge.target),
+    ),
+  };
+}
+
 function NoteBadgeIcon({
   tag,
   className,
@@ -307,7 +377,7 @@ function NoteBadgeIcon({
   tag: string | null | undefined;
   className: string;
 }) {
-  const icon = noteBadgeIcon(tag);
+  const icon = nodeBadgeIcon(tag);
   const [width, height, , , path] = icon.icon;
   const paths = Array.isArray(path) ? path : [path];
   return (
@@ -318,7 +388,7 @@ function NoteBadgeIcon({
       height={17}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
-      className={`note-badge-icon ${className}`}
+      className={`node-badge-icon ${className}`}
       aria-hidden="true"
       focusable="false"
     >
@@ -333,7 +403,9 @@ export function LineageView({
   lineage,
   selected,
   selectedDraft = null,
-  includeDrafts = true,
+  filters = EMPTY_FILTERS,
+  onFilters,
+  nodeOrder = [],
   onSelect,
   onSelectDraft,
   focusRequest,
@@ -341,6 +413,7 @@ export function LineageView({
   newArtifactTdocs = EMPTY_PATHS,
   onTrack,
 }: Props) {
+  const includeDrafts = filters.includeEphemeral;
   const [zoom, setZoom] = useState(1);
   const [panning, setPanning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -361,19 +434,37 @@ export function LineageView({
   });
   const momentumActive = useRef(false);
   const focusedNonce = useRef<number | null>(null);
+  const focusFrame = useRef<number | null>(null);
+  const filterOptions = useMemo(() => {
+    const tdocs = lineage.nodes.filter((node) => node.node_kind !== "draft");
+    return {
+      agendas: uniqueOptions(tdocs.map((node) => node.agenda_item)),
+      types: uniqueOptions(tdocs.map((node) => node.type)),
+      states: uniqueOptions(tdocs.map((node) => node.decision)),
+      sources: uniqueOptions(tdocs.map((node) => node.source)),
+    };
+  }, [lineage.nodes]);
+  const filteredLineage = useMemo(
+    () => filterLineage(lineage, filters),
+    [filters, lineage],
+  );
   const visibleLineage = useMemo(
     () =>
       includeDrafts
-        ? chainDrafts(lineage)
+        ? chainDrafts(filteredLineage)
         : {
-            nodes: lineage.nodes.filter((node) => node.node_kind !== "draft"),
-            edges: lineage.edges.filter((edge) => edge.kind !== "has_draft"),
+            nodes: filteredLineage.nodes.filter(
+              (node) => node.node_kind !== "draft",
+            ),
+            edges: filteredLineage.edges.filter(
+              (edge) => edge.kind !== "has_draft",
+            ),
           },
-    [includeDrafts, lineage],
+    [filteredLineage, includeDrafts],
   );
   const layout = useMemo(
-    () => layoutLineage(visibleLineage),
-    [visibleLineage],
+    () => layoutLineage(visibleLineage, nodeOrder),
+    [nodeOrder, visibleLineage],
   );
   const positions = useMemo(
     () => new Map(layout.nodes.map((node) => [node.tdoc_number, node])),
@@ -409,11 +500,15 @@ export function LineageView({
       return;
     }
     focusedNonce.current = focusRequest.nonce;
+    if (focusFrame.current !== null) {
+      window.cancelAnimationFrame(focusFrame.current);
+    }
     const targetZoom = Math.max(1, zoom);
     if (targetZoom !== zoom) {
       setZoom(targetZoom);
     }
-    const frame = window.requestAnimationFrame(() => {
+    focusFrame.current = window.requestAnimationFrame(() => {
+      focusFrame.current = null;
       const container = scrollRef.current;
       if (!container) {
         return;
@@ -427,8 +522,16 @@ export function LineageView({
         ((LANE_HEIGHT - 12) * targetZoom) / 2 -
         container.clientHeight / 2;
     });
-    return () => window.cancelAnimationFrame(frame);
   }, [focusRequest, positions]);
+
+  useEffect(
+    () => () => {
+      if (focusFrame.current !== null) {
+        window.cancelAnimationFrame(focusFrame.current);
+      }
+    },
+    [],
+  );
 
   const selectNode = (node: LineageNode) => {
     if (node.node_kind === "draft") {
@@ -441,6 +544,14 @@ export function LineageView({
       onSelect(node.tdoc_number);
     }
   };
+
+  const setFilter = (key: keyof Filters, value: string | boolean) => {
+    onFilters?.({ ...filters, [key]: value });
+  };
+  const hasFilters =
+    Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
+    filters.tracked ||
+    !filters.includeEphemeral;
 
   const startPan = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
@@ -554,7 +665,7 @@ export function LineageView({
     scrollRef.current?.releasePointerCapture?.(event.pointerId);
   };
 
-  if (visibleLineage.nodes.length === 0) {
+  if (lineage.nodes.length === 0) {
     return (
       <div className="empty-state">
         <h3>No lineage yet</h3>
@@ -576,14 +687,97 @@ export function LineageView({
             </span>
           ))}
         </span>
-        <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>
-          −
-        </button>
-        <button type="button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>
-          +
-        </button>
-        <button type="button" onClick={() => setZoom(1)}>
-          Reset
+        <span className="lineage-toolbar-actions">
+          <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>
+            −
+          </button>
+          <button type="button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>
+            +
+          </button>
+          <button type="button" onClick={() => setZoom(1)}>
+            Reset
+          </button>
+        </span>
+      </div>
+      <div className="lineage-filters" aria-label="Lineage filters">
+        <label>
+          Agenda
+          <select
+            aria-label="Agenda filter"
+            value={filters.agenda}
+            onChange={(event) => setFilter("agenda", event.target.value)}
+          >
+            <option value="">All</option>
+            {filterOptions.agendas.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Type
+          <select
+            aria-label="Type filter"
+            value={filters.type}
+            onChange={(event) => setFilter("type", event.target.value)}
+          >
+            <option value="">All</option>
+            {filterOptions.types.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          State
+          <select
+            aria-label="State filter"
+            value={filters.state}
+            onChange={(event) => setFilter("state", event.target.value)}
+          >
+            <option value="">All</option>
+            {filterOptions.states.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Source
+          <select
+            aria-label="Source filter"
+            value={filters.source}
+            onChange={(event) => setFilter("source", event.target.value)}
+          >
+            <option value="">All</option>
+            {filterOptions.sources.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={filters.tracked}
+            onChange={(event) => setFilter("tracked", event.target.checked)}
+          />
+          Tracked only
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            aria-label="Include Drafts"
+            checked={filters.includeEphemeral}
+            onChange={(event) =>
+              setFilter("includeEphemeral", event.target.checked)
+            }
+          />
+          Include Drafts
+        </label>
+        <button
+          type="button"
+          className="lineage-clear"
+          disabled={!hasFilters}
+          onClick={() => onFilters?.(EMPTY_FILTERS)}
+        >
+          Clear
         </button>
       </div>
       <div
@@ -657,11 +851,7 @@ export function LineageView({
                     node.is_tracked ? "tracked" : ""
                   } ${node.is_provisional ? "provisional" : ""} ${
                     node.node_kind === "draft" ? "draft" : ""
-                  } ${newFile ? "new-file" : ""} ${
-                    node.node_kind === "draft"
-                      ? ""
-                      : noteTintClass(node.note_badge)
-                  } ${
+                  } ${newFile ? "new-file" : ""} ${nodeTintClass(node)} ${
                     node.node_kind === "draft"
                       ? selectedDraft === node.artifact_id
                         ? "selected"
@@ -693,22 +883,36 @@ export function LineageView({
                   </text>
                   {node.is_tracked && node.node_kind !== "draft" ? (
                     <text
-                      x={node.note_badge ? NODE_WIDTH - 40 : NODE_WIDTH - 16}
+                      x={hasNodeBadge(node) ? NODE_WIDTH - 40 : NODE_WIDTH - 16}
                       y={23}
                       className="node-star"
                     >
                       ★
                     </text>
                   ) : null}
-                  {node.note_badge && node.node_kind !== "draft" ? (
+                  {hasNodeBadge(node) ? (
                     <g
                       className="node-note-badge"
-                      data-testid={`note-badge-${node.tdoc_number}`}
+                      data-testid={
+                        node.node_status
+                          ? `status-badge-${node.tdoc_number}`
+                          : `note-badge-${node.tdoc_number}`
+                      }
                     >
-                      <title>{node.note_badge} note</title>
+                      <title>
+                        {node.node_status
+                          ? `${node.node_status} status`
+                          : `${node.notes_count ?? 0} ${
+                              (node.notes_count ?? 0) === 1 ? "note" : "notes"
+                            }`}
+                      </title>
                       <NoteBadgeIcon
-                        tag={node.note_badge}
-                        className={noteBadgeClass(node.note_badge)}
+                        tag={node.node_status}
+                        className={
+                          node.node_status
+                            ? statusBadgeClass(node.node_status)
+                            : "note-badge"
+                        }
                       />
                     </g>
                   ) : null}

@@ -141,9 +141,12 @@ def seeded_folder(tmp_path: Path) -> MeetingFolder:
             "UPDATE tdoc SET is_tracked = 1 WHERE tdoc_number = 'S3-264202'"
         )
         connection.execute(
-            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
-            "author, source) VALUES ('tdoc', 'S3-264202', "
-            "'Support this CR.', 'Support', 'ben', 'user')"
+            "INSERT INTO note(target_kind, target_ref, body, author, source) "
+            "VALUES ('tdoc', 'S3-264202', 'Support this CR.', 'ben', 'user')"
+        )
+        connection.execute(
+            "INSERT INTO node_status(target_kind, target_ref, status) "
+            "VALUES ('tdoc', 'S3-264202', 'Support')"
         )
         connection.commit()
     finally:
@@ -165,7 +168,8 @@ def test_render_markdown_is_deterministic(tmp_path: Path) -> None:
     assert "```mermaid" in first
     assert "graph LR" in first
     assert "revision_of" in first
-    assert "[Support] Support this CR." in first
+    assert "- Status: Support" in first
+    assert "- Support this CR." in first
     assert "draft S3-264202-r1.docx" in first
     assert "_(ephemeral)_" in first
     assert "### Mail" not in first

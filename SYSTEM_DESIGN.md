@@ -26,9 +26,9 @@ process re-implementation.
 - HTML ingestion of `AgendaWithTdocAllocation_*.htm` (authoritative state + lineage).
 - Excel ingestion of the pre-meeting allocation table (prep data, provenance-aware).
 - Filename heuristics for `Drafts/` (hints only, never authoritative).
-- Mail ingestion from a local `mbox` or `EML` directory (no IMAP/POP client).
+- Mail ingestion from a local `mbox`, `.eml` file, or `EML` directory (no IMAP/POP client).
 - Lineage graph + per-TDoc timeline, filters, detail view.
-- User annotations with position tags, manual lineage assertions, conflict repair.
+- User-managed node statuses and notes, manual lineage assertions, conflict repair.
 - Whole-meeting Markdown export.
 - Ephemeral-safe local cache, single-download policy, OS-default file opening.
 
@@ -57,7 +57,7 @@ Chrome, LibreOffice. `lftp` is **not installed** and is an explicit runtime depe
 | Persistence | SQLite (WAL) | Portable single file, transactional, already available, ideal for app state. |
 | Blob cache | Content-addressed files under the meeting folder | Dedup, renames, portability, auditability. |
 | FTP | `lftp` invoked as a subprocess | Required by the network/proxy/WAP environment; works for FTP and HTTPS mirrors. |
-| Mail | Local `mbox` / `EML` via stdlib `mailbox` + `email` | Thunderbird or any client does fetching; removes IMAP/credential fragility. |
+| Mail | Local `mbox` / `.eml` file / `EML` directory via stdlib `mailbox` + `email` | Thunderbird or any client does fetching; removes IMAP/credential fragility. |
 | Packaging | Nix flake + dev shell (Python, Node, lftp) | Reproducible NixOS setup; preflight blocks startup if `lftp` is missing. |
 
 Process model: one FastAPI process, one serial background sync worker (thread or
@@ -69,7 +69,7 @@ asyncio task), one SQLite connection per request/task, WAL mode.
 
 ```
               ┌──────────────────────────── Browser (React SPA) ───────────────────────────┐
-              │  Rail: tracked + filters   Center: lineage/timeline   Right: detail/notes   │
+              │  Rail: favourites   Center: lineage/filters   Right: detail/notes   │
               └───────────────────────────────────────▲──────────────────────────────────────┘
                                                       │ local JSON/SSE (127.0.0.1)
 ┌─────────────────────────────────────────────────────┴──────────────────────────────────────┐
@@ -163,7 +163,7 @@ everything; no absolute paths are stored.
   },
   "tracked_seed": ["S3-264481", "S3-264388"],
   "sync": { "lazy_drafts": true },
-  "ui": { "default_mode": "auto" }
+  "ui": { "default_mode": "auto", "bar_color": "#ffffff" }
 }
 ```
 
@@ -454,8 +454,8 @@ All filename-derived links are **hints** (`source=filename`, inactive ghost edge
 
 ### 7.6 Mail ingestion
 
-- Source: one `mbox` file or a directory of `.eml` files. Incremental via mtime/size
-  and Message-ID dedup. No IMAP/POP.
+- Source: one `mbox` file, one `.eml` file, or a directory of `.eml` files.
+  Incremental via mtime/size and Message-ID dedup. No IMAP/POP.
 - Parse headers with stdlib `email`; decode RFC 2047 subjects and bodies.
 - Store the raw message blob (content-addressed) and extracted plain text for FTS5.
 - Subject parse:
@@ -512,8 +512,10 @@ assertion(id, subject_kind, subject_ref, predicate, object_kind, object_ref, val
           observed_at, detail JSON)
 conflict(id, predicate, subject_ref, assertion_ids JSON, status, resolution,
          created_at, resolved_at)
-note(id, target_kind, target_ref, body, position_tag, author, source,
+note(id, target_kind, target_ref, body, author, source,
      created_at, updated_at)
+node_status(target_kind, target_ref, status, updated_at,
+            PK(target_kind, target_ref))
 user_action(id, action, target_kind, target_ref, detail, created_at)
 email(id, message_id PK, thread_id, subject, from_addr, to_addrs, cc_addrs,
       date_utc, agenda_item, meeting_id, body_blob_hash, raw_blob_hash,
@@ -656,11 +658,12 @@ Write:
 - `POST /api/assertions` (manual link), `PATCH /api/assertions/{id}` (activate/mute)
 - `POST /api/conflicts/{id}/resolve`
 - `POST /api/notes`, `PATCH /api/notes/{id}`, `DELETE /api/notes/{id}`
+- `PUT /api/status` (separate TDoc or draft node status; `null` clears)
 - `POST /api/artifacts/{id}/open`
 - `POST /api/sync`
 - `POST /api/tdocs/{tdoc}/fetch?lineage=true` (download deferred artifacts)
-- `GET|PUT /api/settings` (source, lazy drafts, auto sync and poll intervals;
-  password write-only)
+- `GET|PUT /api/settings` (source, mail source, lazy drafts, auto sync and poll
+  intervals, UI bar color; password write-only)
 - `POST /api/import/excel?filename=...&force=true` (raw workbook body)
 - `POST /api/finalize`
 
@@ -674,14 +677,20 @@ future AI contract).
 Three-pane desktop layout, responsive enough for a narrow window.
 
 - **Top bar:** meeting selector, Sync Now, sync chip (interval/last/next/health),
-  Settings panel (FTP source, automatic updates and intervals, lazy drafts,
-  workbook upload), and an **Enable alerts** control for browser notifications.
-- **Left rail:** tracked TDocs and search; a per-row tracking star; filter facets
-  (agenda, type, release, WI, source, state); **Include Drafts**; mode switch.
-- **Center:** lineage view (default during meeting) or sortable table (default for
-  prep). Tabs: **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**.
+  Settings panel (FTP source, mail source, automatic updates and intervals,
+  lazy drafts, meeting-bar color, workbook upload), and an **Enable alerts**
+  control for browser notifications. The bar color defaults to `#ffffff`.
+- **Left rail:** compact tracked-favourites list only; a per-row tracking star and
+  unread draft/file/merge/revision/link/status markers; double-click centers the
+  node in Lineage.
+- **Center:** lineage view (default during meeting) with inline filters (agenda,
+  type, state, source, tracked only, **Include Drafts**) or a sortable table
+  (default for prep). Tabs: **Lineage**, **Timeline**, **Conflicts**,
+  **Notifications**, **Log**. Draft visibility filters only the graph; the detail
+  panel still shows all artifacts for the selected node.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
-  notes (with `Support` / `Object` / `Clarify` tags), conflict actions.
+  separate node status (`Support` / `Object` / `Clarify`), free-text notes,
+  conflict actions. Status and notes are available on TDoc and draft nodes.
 
 ### 12.1 Lineage renderer
 
@@ -690,16 +699,18 @@ Custom SVG lane renderer, not a graph library:
 - lanes are lineage paths (git-log style); nodes are TDocs, with optional working
   drafts behind the **Include Drafts** filter, ordered by upload time and chained
   ahead of the TDoc's official revision; clicking a draft opens its own detail
-  panel with artifact metadata and draft-specific notes; artifacts discovered
+  panel with artifact metadata, status, and draft-specific notes; artifacts discovered
   during the session highlight their draft node (or parent TDoc when no draft
   node exists) and can raise a browser desktop notification;
-- `revision_of` = straight continuation; `merged_into` = curved convergence;
-  `has_draft` = dotted child edge; `based_on` = dashed weak/inferred link;
+- `revision_of` = straight continuation; `merged_into` = curved convergence whose
+  lane follows the baseline/revised predecessor rather than the first incoming
+  list entry; `has_draft` = dotted child edge; `based_on` = dashed weak/inferred
+  link;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;
 - state bubble colors: approved/agreed/replied-to green, merged/revised light
   green-grey, noted/postponed yellow, not treated/reserved grey,
   withdrawn/rejected red;
-- tracked TDocs carry a star; a post-it badge shows the latest note type (plain
+- tracked TDocs carry only a star, not an extra outline; a post-it badge shows the latest note type (plain
   note, red `×` Object, green `✓` Support, blue `?` Clarify); node backgrounds
   use matching very light tints; `Avail`, `Treated`, provisional/unconfirmed, and
   conflict badges remain separate;
@@ -745,7 +756,7 @@ Contents:
 1. Header: meeting, generated-at, endpoint, freshness, counts.
 2. Summary table: TDoc, agenda, type, state, source, notes count, tracked.
 3. Per tracked TDoc: metadata, state, lineage (`revision_of` / `merged_into`),
-   full event timeline, notes with position tags, optional mails.
+   full event timeline, status, notes, optional mails.
 4. A Mermaid `graph LR` lineage diagram.
 5. Muted/inactive branches listed and marked; never omitted silently.
 6. Ephemeral artifacts marked as such.

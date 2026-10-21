@@ -4,6 +4,7 @@ import type {
   Conflict,
   ConflictResolution,
   DraftDetail,
+  NodeStatus,
   Note,
   TdocDetail,
 } from "../types";
@@ -17,10 +18,10 @@ interface Props {
   detail: TdocDetail | null;
   draft: DraftDetail | null;
   endpoint: string | null;
-  includeEphemeral: boolean;
   conflicts: Conflict[];
   onTrack: (tdoc: string, tracked: boolean) => void;
-  onAddNote: (body: string, position: string, target: NoteTarget) => void;
+  onAddNote: (body: string, target: NoteTarget) => void;
+  onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
   onAddAssertion: (subject: string, predicate: string, object: string) => void;
   onResolveConflict: (id: number, resolution: ConflictResolution) => void;
@@ -76,6 +77,48 @@ function value(value: string | number | boolean | null | undefined): string {
   return String(value);
 }
 
+const NODE_STATUSES: NodeStatus[] = ["Support", "Object", "Clarify"];
+
+function StatusSection({
+  status,
+  target,
+  onSetStatus,
+}: {
+  status: NodeStatus | null;
+  target: NoteTarget;
+  onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
+}) {
+  return (
+    <section>
+      <h3>Status</h3>
+      <div className="status-editor">
+        <select
+          aria-label="Status"
+          value={status ?? ""}
+          onChange={(event) =>
+            onSetStatus((event.target.value || null) as NodeStatus | null, target)
+          }
+        >
+          <option value="">No tag</option>
+          {NODE_STATUSES.map((option) => (
+            <option key={option}>{option}</option>
+          ))}
+        </select>
+        {status ? (
+          <span className={`badge position-${status.toLowerCase()}`}>
+            {status}
+          </span>
+        ) : (
+          <span className="hint">No status set.</span>
+        )}
+      </div>
+      <p className="hint">
+        The node shows this status ahead of its sticky note.
+      </p>
+    </section>
+  );
+}
+
 function NoteSection({
   notes,
   target,
@@ -84,11 +127,10 @@ function NoteSection({
 }: {
   notes: Note[];
   target: NoteTarget;
-  onAddNote: (body: string, position: string, target: NoteTarget) => void;
+  onAddNote: (body: string, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
 }) {
   const [note, setNote] = useState("");
-  const [position, setPosition] = useState("");
 
   return (
     <section>
@@ -99,11 +141,6 @@ function NoteSection({
         <ul className="note-list">
           {notes.map((item) => (
             <li key={item.id}>
-              {item.position_tag ? (
-                <span className={`badge position-${item.position_tag.toLowerCase()}`}>
-                  {item.position_tag}
-                </span>
-              ) : null}
               <p className="note-body">{item.body}</p>
               <small>{item.author ?? item.source} · {item.created_at}</small>
               <button
@@ -124,7 +161,7 @@ function NoteSection({
           if (!note.trim()) {
             return;
           }
-          onAddNote(note.trim(), position, target);
+          onAddNote(note.trim(), target);
           setNote("");
         }}
       >
@@ -135,16 +172,6 @@ function NoteSection({
           onChange={(event) => setNote(event.target.value)}
         />
         <div className="note-actions">
-          <select
-            aria-label="Position tag"
-            value={position}
-            onChange={(event) => setPosition(event.target.value)}
-          >
-            <option value="">No tag</option>
-            <option>Support</option>
-            <option>Object</option>
-            <option>Clarify</option>
-          </select>
           <button type="submit" className="primary">Add note</button>
         </div>
       </form>
@@ -156,12 +183,14 @@ function DraftDetailPanel({
   draft,
   endpoint,
   onAddNote,
+  onSetStatus,
   onDeleteNote,
   onSelect,
 }: {
   draft: DraftDetail;
   endpoint: string | null;
-  onAddNote: (body: string, position: string, target: NoteTarget) => void;
+  onAddNote: (body: string, target: NoteTarget) => void;
+  onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
   onSelect: (tdoc: string) => void;
 }) {
@@ -233,6 +262,13 @@ function DraftDetailPanel({
         </ul>
       </section>
 
+      <StatusSection
+        key={`draft-status:${draft.id}`}
+        status={draft.node_status}
+        target={{ kind: "draft", ref: String(draft.id) }}
+        onSetStatus={onSetStatus}
+      />
+
       <NoteSection
         key={`draft:${draft.id}`}
         notes={draft.notes}
@@ -248,10 +284,10 @@ export function DetailPanel({
   detail,
   draft,
   endpoint,
-  includeEphemeral,
   conflicts,
   onTrack,
   onAddNote,
+  onSetStatus,
   onDeleteNote,
   onAddAssertion,
   onResolveConflict,
@@ -289,6 +325,7 @@ export function DetailPanel({
         draft={draft}
         endpoint={endpoint}
         onAddNote={onAddNote}
+        onSetStatus={onSetStatus}
         onDeleteNote={onDeleteNote}
         onSelect={onSelect}
       />
@@ -306,9 +343,7 @@ export function DetailPanel({
     );
   }
 
-  const artifacts = detail.artifacts.filter(
-    (artifact) => includeEphemeral || !artifact.is_ephemeral,
-  );
+  const artifacts = detail.artifacts;
   const zipHref = tdocZipUrl(endpoint, detail.tdoc_number);
   const missing = artifacts.filter(
     (artifact) =>
@@ -461,6 +496,13 @@ export function DetailPanel({
           </ul>
         )}
       </section>
+
+      <StatusSection
+        key={`tdoc-status:${detail.tdoc_number}`}
+        status={detail.node_status}
+        target={{ kind: "tdoc", ref: detail.tdoc_number }}
+        onSetStatus={onSetStatus}
+      />
 
       <NoteSection
         key={`tdoc:${detail.tdoc_number}`}

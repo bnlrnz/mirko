@@ -40,7 +40,7 @@ downloaded on demand. Agenda HTML and Inbox mail remain eager.
 - `mirko/ingest/filename.py`, `filename_ingest.py` — filename parser, ephemeral draft
   artifacts, provisional numbers and ghost hints.
 - `mirko/ingest/mail_subject.py`, `mail_ingest.py` — RFC2047 subjects/threading and
-  mentions from mbox or `.eml` trees.
+  mentions from mbox, a single `.eml` file, or `.eml` trees.
 - `mirko/worker.py` — one sync + ingestion cycle with sync-state health.
 - `mirko/repository.py`, `api.py` — read models and typed JSON API under `/api`.
 - `mirko/export.py` — deterministic Markdown export, finalize/archive, mirror.
@@ -59,29 +59,36 @@ nix develop -c python -m mirko <meeting-dir> \
 `--import-excel` ingests the workbook, prints the row/edge counts, and exits;
 refresh the UI afterwards. It is safe to run while the server is idle.
 
-The **Settings** panel in the web UI can edit the FTP source, enable or disable
-automatic FTP updates, set the meeting and idle update intervals, toggle lazy draft
-fetching, and upload the allocation workbook for immediate (forced) parsing. Saves are
-written atomically to `meeting.json` with mode `0600`; credentials are never returned
-by the API.
+The **Settings** panel in the web UI can edit the FTP and mail sources, enable or
+disable automatic FTP updates, set the meeting and idle update intervals, toggle
+lazy draft fetching, choose the meeting-bar color, and upload the allocation
+workbook for immediate (forced) parsing. Saves are written atomically to
+`meeting.json` with mode `0600`; credentials are never returned by the API.
 
 ## Frontend
 
-React + TypeScript + Vite. Three panes: tracked TDocs/filters, a center view
-(Lineage, Timeline, Conflicts, Notifications, Log), and a detail panel with
-metadata, artifacts, mail, notes, assertions, manual links, and conflict actions.
-Each left-rail TDoc has a tracking star; double-clicking a lineage node toggles
-tracking too. Tracking a TDoc expands to its connected lineage component; the
-Notifications tab lists new files, decisions, and newly connected nodes for that
-tracked set, with the document title beside each TDoc link. Unread entries are
-lightly highlighted; hovering or clicking an entry marks it seen and lowers the
-tab count without removing it. The Log tab shows persisted tracking and note
-actions. The Lineage graph can show cached working drafts as child nodes via the
-**Include Drafts** filter, renders a post-it badge and matching light background
-tint for the latest note type, and infers LS-in → LS-out reply links from
-matching titles (unverified `based_on` edges). Clicking a draft opens a draft
-detail panel with its artifact metadata and draft-specific notes. Each TDoc detail
-links its official ZIP at `Docs/<tdoc-nr>.zip`.
+React + TypeScript + Vite. Three panes: a compact tracked-favourites rail, a
+center view (Lineage, Timeline, Conflicts, Notifications, Log), and a detail panel
+with metadata, artifacts, mail, notes, assertions, manual links, and conflict
+actions. The rail lists only tracked TDocs, each with a star and an unread marker
+for draft, file, merge, revision, link, or status updates; double-clicking a
+favourite centers its lineage node. Tracking a TDoc expands to its connected
+lineage component. The Notifications tab lists new files, decisions, and newly
+connected nodes for that tracked set, with the document title beside each TDoc
+link. Unread entries are lightly highlighted; hovering or clicking an entry marks
+it seen and lowers the tab count without removing it. The Log tab shows persisted
+tracking and note actions.
+
+Filters (agenda, type, state, source, tracked only, and **Include Drafts**) live in
+the Lineage toolbar. Draft visibility only affects the graph, never the selected
+node's detail panel. The graph can show cached working drafts as child nodes and
+infers LS-in → LS-out reply links from matching titles (unverified `based_on`
+edges). TDoc and draft nodes share independent status and note features: a
+`Support` / `Object` / `Clarify` status takes visual precedence, while notes alone
+show a post-it badge and light yellow tint. Merged nodes derive their lane from
+the baseline/revised document rather than the first incoming list entry. Clicking
+a draft opens a draft detail panel with its artifact metadata, status, and notes.
+Each TDoc detail links its official ZIP at `Docs/<tdoc-nr>.zip`.
 Newly arrived files glow in the lineage graph; **Enable alerts** requests browser
 notification permission and raises a desktop notification for each new document.
 Deferred artifacts show as `not fetched` with a fetch button and their FTP upload
@@ -105,8 +112,8 @@ Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
 `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,
 `PATCH /api/assertions/{id}`, `POST /api/conflicts/{id}/resolve`, `POST /api/notes`,
-`PATCH|DELETE /api/notes/{id}`, `GET|PUT /api/settings`, `POST /api/import/excel`,
-`POST /api/finalize`.
+`PATCH|DELETE /api/notes/{id}`, `PUT /api/status`, `GET|PUT /api/settings`,
+`POST /api/import/excel`, `POST /api/finalize`.
 
 ## Methodology
 

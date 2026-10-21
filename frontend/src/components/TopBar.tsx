@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 import type { Meeting, SyncStatus } from "../types";
 
 interface Props {
@@ -21,6 +23,25 @@ function freshness(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
 }
 
+function barColors(color: string): CSSProperties {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) {
+    return {};
+  }
+  const value = Number.parseInt(match[1], 16);
+  const red = (value >> 16) & 0xff;
+  const green = (value >> 8) & 0xff;
+  const blue = value & 0xff;
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  const light = luminance > 0.6;
+  return {
+    background: color,
+    "--topbar-text": light ? "#1b2430" : "#f8fafc",
+    "--topbar-muted": light ? "#475467" : "rgba(248, 250, 252, 0.78)",
+    "--topbar-accent": light ? "#2457c5" : "#f8fafc",
+  } as CSSProperties;
+}
+
 export function TopBar({
   meeting,
   sync,
@@ -34,7 +55,7 @@ export function TopBar({
   onEnableNotifications,
 }: Props) {
   return (
-    <header className="top-bar">
+    <header className="top-bar" style={meeting ? barColors(meeting.bar_color) : undefined}>
       <div className="meeting-title">
         <strong>Mirko</strong>
         <span>{meeting?.title ?? "Loading meeting…"}</span>

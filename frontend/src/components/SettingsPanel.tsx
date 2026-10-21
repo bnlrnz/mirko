@@ -28,6 +28,13 @@ export function SettingsPanel({
   const [password, setPassword] = useState("");
   const [clearPassword, setClearPassword] = useState(false);
   const [tls, setTls] = useState(settings.source.tls);
+  const [mailKind, setMailKind] = useState<"" | "mbox" | "eml">(
+    settings.mail?.kind ?? "",
+  );
+  const [mailPath, setMailPath] = useState(settings.mail?.path ?? "");
+  const [mailEmlPath, setMailEmlPath] = useState(
+    settings.mail?.eml_dir ?? "",
+  );
   const [lazyDrafts, setLazyDrafts] = useState(settings.lazy_drafts);
   const [autoSync, setAutoSync] = useState(settings.auto_sync);
   const [meetingInterval, setMeetingInterval] = useState(
@@ -36,6 +43,7 @@ export function SettingsPanel({
   const [idleInterval, setIdleInterval] = useState(
     String(settings.idle_interval_s),
   );
+  const [barColor, setBarColor] = useState(settings.bar_color);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -52,10 +60,19 @@ export function SettingsPanel({
       password: password === "" ? null : password,
       clear_password: clearPassword,
       tls,
+      mail:
+        mailKind === ""
+          ? null
+          : {
+              kind: mailKind,
+              path: mailKind === "mbox" ? mailPath.trim() : null,
+              eml_dir: mailKind === "eml" ? mailEmlPath.trim() : null,
+            },
       lazy_drafts: lazyDrafts,
       auto_sync: autoSync,
       meeting_interval_s: Number(meetingInterval),
       idle_interval_s: Number(idleInterval),
+      bar_color: barColor,
     });
   };
 
@@ -88,9 +105,6 @@ export function SettingsPanel({
             <h2>Meeting settings</h2>
             <p>Saved to this meeting&apos;s meeting.json.</p>
           </div>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
         </header>
 
         <form className="settings-form" onSubmit={submit}>
@@ -211,6 +225,54 @@ export function SettingsPanel({
           </fieldset>
 
           <fieldset>
+            <legend>Mail analysis</legend>
+            <div className="settings-grid">
+              <label className="wide">
+                Source
+                <select
+                  aria-label="Mail source kind"
+                  value={mailKind}
+                  onChange={(event) =>
+                    setMailKind(event.target.value as "" | "mbox" | "eml")
+                  }
+                >
+                  <option value="">Disabled</option>
+                  <option value="mbox">mbox file</option>
+                  <option value="eml">EML file or folder</option>
+                </select>
+              </label>
+              {mailKind === "mbox" ? (
+                <label className="wide">
+                  mbox file
+                  <input
+                    aria-label="Mail mbox path"
+                    required
+                    placeholder="/home/ben/mail/sa3-130.mbox"
+                    value={mailPath}
+                    onChange={(event) => setMailPath(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              {mailKind === "eml" ? (
+                <label className="wide">
+                  EML file or folder
+                  <input
+                    aria-label="Mail EML path"
+                    required
+                    placeholder="/home/ben/mail/sa3-130 or inbox.eml"
+                    value={mailEmlPath}
+                    onChange={(event) => setMailEmlPath(event.target.value)}
+                  />
+                </label>
+              ) : null}
+            </div>
+            <p className="hint">
+              Local path read by the Mirko process; new mail is ingested on the
+              next sync.
+            </p>
+          </fieldset>
+
+          <fieldset>
             <legend>Sync</legend>
             <label className="check">
               <input
@@ -259,6 +321,24 @@ export function SettingsPanel({
             <p className="hint">
               Agenda HTML and Inbox mail stay eager. Deferred drafts appear as
               remote artifacts until requested.
+            </p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Appearance</legend>
+            <div className="settings-grid">
+              <label>
+                Bar color
+                <input
+                  aria-label="Bar color"
+                  type="color"
+                  value={barColor}
+                  onChange={(event) => setBarColor(event.target.value)}
+                />
+              </label>
+            </div>
+            <p className="hint">
+              Sets the meeting top bar accent for this folder.
             </p>
           </fieldset>
 

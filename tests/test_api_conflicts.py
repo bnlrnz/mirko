@@ -186,16 +186,14 @@ def test_assertion_patch_and_note_lifecycle(tmp_path: Path) -> None:
             "target_kind": "tdoc",
             "target_ref": "S3-264202",
             "body": "Original",
-            "position_tag": "Clarify",
         },
     ).json()
     updated = client.patch(
         f"/api/notes/{note['id']}",
-        json={"body": "Edited", "position_tag": "Object"},
+        json={"body": "Edited"},
     )
     assert updated.status_code == 200
     assert updated.json()["body"] == "Edited"
-    assert updated.json()["position_tag"] == "Object"
 
     assert client.delete(f"/api/notes/{note['id']}").status_code == 204
     assert client.get("/api/tdocs/S3-264202").json()["notes_count"] == 0

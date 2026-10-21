@@ -1,6 +1,7 @@
 import type {
   Conflict,
   ConflictResolution,
+  Filters,
   Lineage,
   NotificationItem,
   TimelineEvent,
@@ -32,7 +33,9 @@ interface Props {
   conflicts: Conflict[];
   selected: string | null;
   selectedDraft: number | null;
-  includeDrafts: boolean;
+  filters: Filters;
+  favoriteOrder: readonly string[];
+  onFilters: (filters: Filters) => void;
   onSelect: (tdoc: string, artifactId?: number) => void;
   onSelectDraft: (artifactId: number) => void;
   focusRequest: { tdoc: string; nonce: number } | null;
@@ -63,7 +66,9 @@ export function CenterPane({
   conflicts,
   selected,
   selectedDraft,
-  includeDrafts,
+  filters,
+  favoriteOrder,
+  onFilters,
   onSelect,
   onSelectDraft,
   focusRequest,
@@ -103,7 +108,9 @@ export function CenterPane({
             lineage={lineage}
             selected={selected}
             selectedDraft={selectedDraft}
-            includeDrafts={includeDrafts}
+            filters={filters}
+            onFilters={onFilters}
+            nodeOrder={favoriteOrder}
             onSelect={onSelect}
             onSelectDraft={onSelectDraft}
             focusRequest={focusRequest}

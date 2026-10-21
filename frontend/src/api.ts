@@ -8,6 +8,7 @@ import type {
   Lineage,
   MailSummary,
   Meeting,
+  NodeStatus,
   Note,
   NotificationItem,
   Settings,
@@ -102,10 +103,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  updateNote: (
-    id: number,
-    body: { body?: string; position_tag?: string | null },
-  ) =>
+  updateNote: (id: number, body: { body?: string }) =>
     request<Note>(`/api/notes/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -151,13 +149,25 @@ export const api = {
     target_kind: string;
     target_ref: string;
     body: string;
-    position_tag?: string | null;
   }) =>
     request<unknown>("/api/notes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  setStatus: (body: {
+    target_kind: "tdoc" | "draft";
+    target_ref: string;
+    status: NodeStatus | null;
+  }) =>
+    request<{ target_kind: string; target_ref: string; status: NodeStatus | null }>(
+      "/api/status",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   finalize: () =>
     request<{ status: string; export_path: string }>("/api/finalize", {
       method: "POST",

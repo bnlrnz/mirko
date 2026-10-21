@@ -164,11 +164,16 @@ def seeded_folder(tmp_path: Path) -> MeetingFolder:
             "UPDATE tdoc SET is_tracked = 1 WHERE tdoc_number = 'S3-264202'"
         )
         connection.execute(
-            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
-            "author, source, created_at, updated_at) "
-            "VALUES ('tdoc', 'S3-264202', 'Support this CR.', 'Support', "
+            "INSERT INTO note(target_kind, target_ref, body, author, source, "
+            "created_at, updated_at) "
+            "VALUES ('tdoc', 'S3-264202', 'Support this CR.', "
             "'ben', 'user', ?, ?)",
             ("2026-10-16T13:00:00.000000Z", "2026-10-16T13:00:00.000000Z"),
+        )
+        connection.execute(
+            "INSERT INTO node_status(target_kind, target_ref, status, updated_at) "
+            "VALUES ('tdoc', 'S3-264202', 'Support', ?)",
+            ("2026-10-16T13:00:00.000000Z",),
         )
         connection.execute(
             "INSERT INTO conflict(predicate, subject_ref, assertion_ids, status) "
@@ -261,32 +266,41 @@ def test_timeline_aggregates_events(client: TestClient) -> None:
     assert client.get("/api/tdocs/S3-999999/timeline").status_code == 404
 
 
-def test_lineage_note_badge_uses_latest_non_default_note(
+def test_lineage_keeps_status_separate_from_notes(
     seeded_folder: MeetingFolder, client: TestClient
 ) -> None:
     connection = seeded_folder.connect()
     try:
         connection.execute(
-            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
-            "author, source, created_at, updated_at) "
-            "VALUES ('tdoc', 'S3-264202', 'Actually object.', 'Object', "
-            "'ben', 'user', ?, ?)",
-            ("2026-10-16T14:00:00.000000Z", "2026-10-16T14:00:00.000000Z"),
-        )
-        connection.execute(
-            "INSERT INTO note(target_kind, target_ref, body, position_tag, "
-            "author, source, created_at, updated_at) "
-            "VALUES ('tdoc', 'S3-264203', 'Untagged note.', NULL, "
-            "'ben', 'user', ?, ?)",
-            ("2026-10-16T15:00:00.000000Z", "2026-10-16T15:00:00.000000Z"),
+            "INSERT INTO note(target_kind, target_ref, body, author, source) "
+            "VALUES ('tdoc', 'S3-264203', 'Untagged note.', 'ben', 'user')"
         )
         connection.commit()
     finally:
         connection.close()
 
     tracked = client.get("/api/lineage", params={"tracked": "true"}).json()
-    badges = {node["tdoc_number"]: node["note_badge"] for node in tracked["nodes"]}
-    assert badges == {"S3-264202": "Object", "S3-264203": "note"}
+    nodes = {node["tdoc_number"]: node for node in tracked["nodes"]}
+    assert nodes["S3-264202"]["node_status"] == "Support"
+    assert nodes["S3-264202"]["notes_count"] == 1
+    assert nodes["S3-264203"]["node_status"] is None
+    assert nodes["S3-264203"]["notes_count"] == 1
+
+    status = client.put(
+        "/api/status",
+        json={
+            "target_kind": "tdoc",
+            "target_ref": "S3-264203",
+            "status": "Object",
+        },
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "Object"
+
+    tracked = client.get("/api/lineage", params={"tracked": "true"}).json()
+    nodes = {node["tdoc_number"]: node for node in tracked["nodes"]}
+    assert nodes["S3-264203"]["node_status"] == "Object"
+    assert nodes["S3-264203"]["notes_count"] == 1
 
 
 def test_lineage_tracked_and_full(
@@ -297,8 +311,11 @@ def test_lineage_tracked_and_full(
         "S3-264202",
         "S3-264203",
     }
-    badges = {node["tdoc_number"]: node["note_badge"] for node in tracked["nodes"]}
-    assert badges == {"S3-264202": "Support", "S3-264203": None}
+    statuses = {
+        node["tdoc_number"]: (node["node_status"], node["notes_count"])
+        for node in tracked["nodes"]
+    }
+    assert statuses == {"S3-264202": ("Support", 1), "S3-264203": (None, 0)}
     assert len(tracked["edges"]) == 1
     assert tracked["edges"][0]["kind"] == "revision_of"
 
@@ -346,7 +363,43 @@ def test_lineage_can_include_working_drafts(
     assert draft["tdoc_number"].startswith("draft:")
     assert draft["title"] == "draft S3-264202-r1.docx"
     assert draft["status"] in {"present", "remote"}
+    assert draft["node_status"] is None
+    assert draft["notes_count"] == 0
     assert draft["artifact_id"] is not None
+
+    artifact_id = draft["artifact_id"]
+    note = client.post(
+        "/api/notes",
+        json={
+            "target_kind": "draft",
+            "target_ref": str(artifact_id),
+            "body": "Draft note.",
+        },
+    )
+    assert note.status_code == 201, note.text
+    status = client.put(
+        "/api/status",
+        json={
+            "target_kind": "draft",
+            "target_ref": str(artifact_id),
+            "status": "Clarify",
+        },
+    )
+    assert status.status_code == 200, status.text
+
+    data = client.get(
+        "/api/lineage",
+        params={"tracked": "true", "include_drafts": "true"},
+    ).json()
+    draft = next(
+        node for node in data["nodes"] if node["node_kind"] == "draft"
+    )
+    assert draft["node_status"] == "Clarify"
+    assert draft["notes_count"] == 1
+
+    detail = client.get(f"/api/drafts/{artifact_id}").json()
+    assert detail["node_status"] == "Clarify"
+    assert detail["notes"][0]["body"] == "Draft note."
 
     links = [edge for edge in data["edges"] if edge["kind"] == "has_draft"]
     assert links == [

@@ -57,6 +57,7 @@ def test_meeting_endpoint(client: TestClient) -> None:
         "tdoc_series_prefix": "S3-26",
         "source_kind": "local",
         "endpoint": "ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3",
+        "bar_color": "#ffffff",
     }
 
 
