@@ -80,6 +80,9 @@ export default function App() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [seenNotifications, setSeenNotifications] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [newArtifacts, setNewArtifacts] = useState<NotificationItem[]>([]);
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
@@ -99,9 +102,24 @@ export default function App() {
   const staticRequest = useRef(0);
   const lastSyncMarker = useRef<string | null>(null);
   const knownArtifacts = useRef<Set<string> | null>(null);
+  const notificationsRef = useRef<NotificationItem[]>([]);
 
   const clearArtifactHighlight = useCallback(() => {
     setHighlightArtifact(null);
+  }, []);
+
+  const markNotificationsSeen = useCallback((refs: Iterable<string>) => {
+    setSeenNotifications((current) => {
+      const next = new Set(current);
+      let changed = false;
+      for (const ref of refs) {
+        if (!next.has(ref)) {
+          next.add(ref);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
   }, []);
 
   const onSelect = useCallback((tdoc: string, artifactId?: number) => {
@@ -112,7 +130,12 @@ export default function App() {
     setNewArtifacts((current) =>
       current.filter((item) => !item.tdocs.includes(tdoc)),
     );
-  }, []);
+    markNotificationsSeen(
+      notificationsRef.current
+        .filter((item) => item.tdocs.includes(tdoc))
+        .map((item) => item.ref),
+    );
+  }, [markNotificationsSeen]);
 
   const onSelectDraft = useCallback(
     (artifactId: number) => {
@@ -127,9 +150,10 @@ export default function App() {
         setNewArtifacts((current) =>
           current.filter((item) => item.ref !== path),
         );
+        markNotificationsSeen([path]);
       }
     },
-    [lineage.nodes],
+    [lineage.nodes, markNotificationsSeen],
   );
 
   const announceArtifacts = useCallback(
@@ -209,6 +233,7 @@ export default function App() {
       }
       setMeeting(meetingData);
       setLineage(lineageData);
+      notificationsRef.current = notificationData;
       setNotifications(notificationData);
       announceArtifacts(notificationData);
       setLog(logData);
@@ -585,6 +610,14 @@ export default function App() {
     [conflicts, selected],
   );
 
+  const unreadNotificationCount = useMemo(
+    () =>
+      notifications.reduce(
+        (count, item) => count + (seenNotifications.has(item.ref) ? 0 : 1),
+        0,
+      ),
+    [notifications, seenNotifications],
+  );
   const newArtifactPaths = useMemo(
     () => new Set(newArtifacts.map((item) => item.ref)),
     [newArtifacts],
@@ -630,6 +663,9 @@ export default function App() {
           lineage={lineage}
           timeline={timeline}
           notifications={notifications}
+          unreadNotificationCount={unreadNotificationCount}
+          seenNotifications={seenNotifications}
+          onNotificationSeen={markNotificationsSeen}
           log={log}
           conflicts={conflicts}
           selected={selected}

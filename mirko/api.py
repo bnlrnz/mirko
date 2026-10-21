@@ -225,6 +225,7 @@ class NotificationItem(BaseModel):
     title: str
     detail: str | None = None
     tdocs: list[str] = []
+    tdoc_titles: dict[str, str] = {}
     agenda_item: str | None = None
     created_at: str | None = None
     action: Literal["track"] | None = None

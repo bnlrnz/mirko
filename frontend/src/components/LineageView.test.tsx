@@ -250,6 +250,21 @@ describe("LineageView", () => {
     expect(
       screen.getByTestId("note-badge-S3-264202").querySelectorAll("path"),
     ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /S3-264202 Original CR/ }),
+    ).toHaveClass("note-tint-support");
+    expect(
+      screen.getByRole("button", { name: /S3-264203 Original CR/ }),
+    ).toHaveClass("note-tint-object");
+    expect(
+      screen.getByRole("button", { name: /S3-264204 Original CR/ }),
+    ).toHaveClass("note-tint-clarify");
+    expect(
+      screen.getByRole("button", { name: /S3-264205 Original CR/ }),
+    ).toHaveClass("note-tint-note");
+    expect(
+      screen.getByRole("button", { name: /S3-264206 Original CR/ }),
+    ).not.toHaveClass("note-tint-note");
   });
 
   it("toggles tracking when a node is double-clicked", () => {

@@ -162,6 +162,7 @@ export interface NotificationItem {
   title: string;
   detail: string | null;
   tdocs: string[];
+  tdoc_titles?: Record<string, string>;
   agenda_item: string | null;
   created_at: string | null;
   action: "track" | null;

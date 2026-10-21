@@ -419,3 +419,8 @@ def test_track_expands_lineage_and_notifications(tmp_path: Path) -> None:
     assert lineage["action"] == "track"
     assert lineage["action_ref"] == "S3-264999"
     assert "S3-264999" in lineage["tdocs"]
+    assert lineage["tdoc_titles"]["S3-264202"] == "Original"
+    artifact = next(item for item in items if item["kind"] == "artifact")
+    assert artifact["tdoc_titles"]["S3-264202"] == "new.docx"
+    decision = next(item for item in items if item["kind"] == "decision")
+    assert decision["tdoc_titles"]["S3-264202"] == "Original"

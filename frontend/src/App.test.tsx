@@ -155,6 +155,12 @@ describe("App", () => {
     const panel = await screen.findByLabelText("Detail for S3-264203");
     expect(within(panel).getByText("Revised CR")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: /Track/ })).toBeInTheDocument();
+    expect(
+      within(panel).getByRole("link", { name: "S3-264203.zip" }),
+    ).toHaveAttribute(
+      "href",
+      "https://10.10.10.10/ftp/Meetings_3GPP_SYNC/SA3/Docs/S3-264203.zip",
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
     expect(
@@ -248,11 +254,49 @@ describe("App", () => {
     expect(within(list).getByText("New link to S3-264999")).toBeInTheDocument();
     expect(within(list).getByText("New file for S3-264202")).toBeInTheDocument();
     expect(within(list).getByRole("button", { name: "Track S3-264999" })).toBeInTheDocument();
+    expect(within(list).getAllByText("Original CR")).toHaveLength(2);
+    expect(
+      within(list).getByText("draft S3-264202-r2.docx"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Sync Now" })).toBeEnabled();
     });
+  });
+
+  it("keeps notifications and clears unread state when they are seen", async () => {
+    render(<App />);
+    const tab = await screen.findByRole("tab", { name: /Notifications/ });
+    expect(within(tab).getByText("3")).toBeInTheDocument();
+    fireEvent.click(tab);
+    const list = await screen.findByLabelText("Tracked TDoc updates");
+    const first = within(list)
+      .getByText("New link to S3-264999")
+      .closest("li");
+    const second = within(list)
+      .getByText("New file for S3-264202")
+      .closest("li");
+    expect(first).toHaveClass("notification-unread");
+    expect(second).toHaveClass("notification-unread");
+
+    fireEvent.mouseEnter(first as HTMLElement);
+    await waitFor(() => {
+      expect(within(tab).getByText("2")).toBeInTheDocument();
+    });
+    expect(first).not.toHaveClass("notification-unread");
+
+    fireEvent.click(second as HTMLElement);
+    await waitFor(() => {
+      expect(within(tab).getByText("1")).toBeInTheDocument();
+    });
+
+    const rail = screen.getByLabelText("Tracked TDocs and filters");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    await waitFor(() => {
+      expect(within(tab).queryByText("1")).not.toBeInTheDocument();
+    });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
   });
 
   it("highlights and notifies when a new artifact arrives", async () => {
@@ -434,6 +478,12 @@ describe("App", () => {
       "href",
       "https://10.10.10.10/ftp/Meetings_3GPP_SYNC/SA3/Inbox/Drafts/draft%20S3-264202-r1.docx",
     );
+    expect(
+      within(panel).queryByRole("link", { name: /S3-264202\.zip/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByRole("link", { name: /S3-264203\.zip/ }),
+    ).not.toBeInTheDocument();
     fireEvent.change(within(panel).getByLabelText("New note"), {
       target: { value: "Draft needs a title fix." },
     });

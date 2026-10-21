@@ -200,6 +200,10 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .log-action { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .log-list p { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 .log-list time { margin-left: auto; color: var(--muted); font-size: 11px; }
+.node.note-tint-object rect { fill: #fdecec; }
+.node.note-tint-note rect { fill: #fff9db; }
+.node.note-tint-support rect { fill: #e9f7ee; }
+.node.note-tint-clarify rect { fill: #eaf2fd; }
 .node.selected rect { fill: var(--accent-soft); }
 
 .empty-state { color: var(--muted); text-align: center; padding: 40px 18px; }
@@ -237,13 +241,16 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .note-actions select { border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
 
 .notification-list { list-style: none; margin: 0; padding: 0; }
-.notification-list li { border-bottom: 1px solid var(--border); padding: 10px 4px; display: flex; flex-direction: column; gap: 4px; }
+.notification-list li { border-bottom: 1px solid var(--border); padding: 10px 4px; display: flex; flex-direction: column; gap: 4px; transition: background 160ms ease; }
+.notification-list li.notification-unread { background: #fffaf0; box-shadow: inset 3px 0 0 #e7c98b; }
 .notification-heading { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
 .notification-heading .created-at { margin-left: auto; color: var(--muted); font-size: 12px; }
 .notification-title { border: 0; background: none; padding: 0; text-align: left; font-weight: 600; color: var(--text); }
 .notification-title:hover { color: var(--accent); }
 .notification-list p { margin: 2px 0; color: var(--muted); }
 .notification-actions { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.notification-tdoc { display: inline-flex; align-items: baseline; gap: 6px; }
+.notification-doc-title { color: var(--muted); font-size: 12px; }
 .badge.kind-lineage { color: var(--accent); border-color: #b8c8ea; }
 .badge.kind-artifact { color: var(--ok); border-color: #b4d8c5; }
 .badge.kind-decision { color: var(--warning); border-color: #e7c98b; }

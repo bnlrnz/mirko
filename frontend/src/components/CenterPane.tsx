@@ -25,6 +25,9 @@ interface Props {
   lineage: Lineage;
   timeline: TimelineEvent[];
   notifications: NotificationItem[];
+  unreadNotificationCount: number;
+  seenNotifications: ReadonlySet<string>;
+  onNotificationSeen: (refs: Iterable<string>) => void;
   log: UserAction[];
   conflicts: Conflict[];
   selected: string | null;
@@ -53,6 +56,9 @@ export function CenterPane({
   lineage,
   timeline,
   notifications,
+  unreadNotificationCount,
+  seenNotifications,
+  onNotificationSeen,
   log,
   conflicts,
   selected,
@@ -82,8 +88,8 @@ export function CenterPane({
             {item.id === "conflicts" && conflicts.length > 0 ? (
               <span className="count">{conflicts.length}</span>
             ) : null}
-            {item.id === "notifications" && notifications.length > 0 ? (
-              <span className="count">{notifications.length}</span>
+            {item.id === "notifications" && unreadNotificationCount > 0 ? (
+              <span className="count">{unreadNotificationCount}</span>
             ) : null}
             {item.id === "log" && log.length > 0 ? (
               <span className="count">{log.length}</span>
@@ -119,6 +125,8 @@ export function CenterPane({
         {tab === "notifications" ? (
           <NotificationsView
             items={notifications}
+            seen={seenNotifications}
+            onSeen={onNotificationSeen}
             onSelect={onSelect}
             onTrack={(tdoc) => onTrack(tdoc, true)}
           />

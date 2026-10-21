@@ -2,6 +2,8 @@ import type { NotificationItem } from "../types";
 
 interface Props {
   items: NotificationItem[];
+  seen: ReadonlySet<string>;
+  onSeen: (refs: Iterable<string>) => void;
   onSelect: (tdoc: string) => void;
   onTrack: (tdoc: string) => void;
 }
@@ -14,7 +16,13 @@ function when(value: string | null): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export function NotificationsView({ items, onSelect, onTrack }: Props) {
+export function NotificationsView({
+  items,
+  seen,
+  onSeen,
+  onSelect,
+  onTrack,
+}: Props) {
   if (items.length === 0) {
     return (
       <div className="empty-state">
@@ -30,7 +38,14 @@ export function NotificationsView({ items, onSelect, onTrack }: Props) {
   return (
     <ul className="notification-list" aria-label="Tracked TDoc updates">
       {items.map((item) => (
-        <li key={`${item.kind}-${item.ref}`} className={`notification-${item.kind}`}>
+        <li
+          key={`${item.kind}-${item.ref}`}
+          className={`notification-${item.kind} ${
+            seen.has(item.ref) ? "" : "notification-unread"
+          }`}
+          onMouseEnter={() => onSeen([item.ref])}
+          onClick={() => onSeen([item.ref])}
+        >
           <div className="notification-heading">
             <span className={`badge kind-${item.kind}`}>{item.kind}</span>
             {item.agenda_item ? <span className="badge">{item.agenda_item}</span> : null}
@@ -46,14 +61,20 @@ export function NotificationsView({ items, onSelect, onTrack }: Props) {
           {item.detail ? <p>{item.detail}</p> : null}
           <div className="notification-actions">
             {item.tdocs.map((tdoc) => (
-              <button
-                key={tdoc}
-                type="button"
-                className="link-button"
-                onClick={() => onSelect(tdoc)}
-              >
-                {tdoc}
-              </button>
+              <span key={tdoc} className="notification-tdoc">
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => onSelect(tdoc)}
+                >
+                  {tdoc}
+                </button>
+                {item.tdoc_titles?.[tdoc] ? (
+                  <span className="notification-doc-title">
+                    {item.tdoc_titles[tdoc]}
+                  </span>
+                ) : null}
+              </span>
             ))}
             {item.action === "track" && item.action_ref ? (
               <button

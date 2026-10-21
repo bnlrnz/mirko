@@ -58,6 +58,17 @@ export function artifactUrl(
   return `https://${host}${prefix}${base}/${path}`;
 }
 
+export function tdocZipUrl(
+  endpoint: string | null,
+  tdocNumber: string,
+): string | null {
+  const tdoc = tdocNumber.trim().toUpperCase();
+  if (!tdoc) {
+    return null;
+  }
+  return artifactUrl(endpoint, `Docs/${tdoc}.zip`);
+}
+
 function value(value: string | number | boolean | null | undefined): string {
   if (value === null || value === undefined || value === "") {
     return "—";
@@ -298,6 +309,7 @@ export function DetailPanel({
   const artifacts = detail.artifacts.filter(
     (artifact) => includeEphemeral || !artifact.is_ephemeral,
   );
+  const zipHref = tdocZipUrl(endpoint, detail.tdoc_number);
   const missing = artifacts.filter(
     (artifact) =>
       artifact.blob_hash === null &&
@@ -352,6 +364,23 @@ export function DetailPanel({
           <p className="note-body">{detail.treated_note}</p>
         </section>
       ) : null}
+
+      <section>
+        <h3>TDoc ZIP</h3>
+        <ul className="artifact-list">
+          <li>
+            <span className="badge">official file</span>
+            {zipHref ? (
+              <a href={zipHref} target="_blank" rel="noreferrer">
+                {detail.tdoc_number}.zip
+              </a>
+            ) : (
+              <span>{detail.tdoc_number}.zip</span>
+            )}
+            <small>Docs/{detail.tdoc_number}.zip</small>
+          </li>
+        </ul>
+      </section>
 
       <section>
         <h3>

@@ -700,8 +700,9 @@ Custom SVG lane renderer, not a graph library:
   green-grey, noted/postponed yellow, not treated/reserved grey,
   withdrawn/rejected red;
 - tracked TDocs carry a star; a post-it badge shows the latest note type (plain
-  note, red `×` Object, green `✓` Support, blue `?` Clarify); `Avail`, `Treated`,
-  provisional/unconfirmed, and conflict badges remain separate;
+  note, red `×` Object, green `✓` Support, blue `?` Clarify); node backgrounds
+  use matching very light tints; `Avail`, `Treated`, provisional/unconfirmed, and
+  conflict badges remain separate;
 - expand/collapse per tracked set; click-drag on the background pans in all
   directions with inertia (a click stops the fling); nodes remain clickable;
   zoom controls; double-clicking a TDoc in the left list centers the graph on its
@@ -719,8 +720,13 @@ visually distinct.
 - Adding a tracked TDoc is instant and local; tracking expands to every existing
   TDoc in the active lineage component, while untracking removes only the selected
   node. New files, decisions, and newly connected nodes surface in Notifications
-  using the tracked timestamp. Tracking changes and note actions are recorded in
-  `user_action` and shown in the Log tab.
+  using the tracked timestamp; each TDoc link shows its document title (artifact
+  filename for drafts). Unread entries are lightly highlighted; hovering or
+  clicking one marks it seen and lowers the tab count while keeping the history
+  visible, and opening a related TDoc or draft marks its entries seen. Tracking
+  changes and note actions are recorded in `user_action` and shown in the Log tab.
+- Each TDoc detail links its official ZIP using the fixed
+  `Docs/<tdoc-nr>.zip` path; working draft details do not carry these links.
 - Manual link creation: "revision of" / "merged into" / "merged from", with source
   badges and an explicit "unverified" state.
 - Conflict resolution: accept HTML, keep mine, or repair; the losing branch is

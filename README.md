@@ -73,11 +73,15 @@ metadata, artifacts, mail, notes, assertions, manual links, and conflict actions
 Each left-rail TDoc has a tracking star; double-clicking a lineage node toggles
 tracking too. Tracking a TDoc expands to its connected lineage component; the
 Notifications tab lists new files, decisions, and newly connected nodes for that
-tracked set. The Log tab shows persisted tracking and note actions. The Lineage
-graph can show cached working drafts as child nodes via the **Include Drafts**
-filter, renders a post-it badge for the latest note type, and infers LS-in → LS-out
-reply links from matching titles (unverified `based_on` edges). Clicking a draft
-opens a draft detail panel with its artifact metadata and draft-specific notes.
+tracked set, with the document title beside each TDoc link. Unread entries are
+lightly highlighted; hovering or clicking an entry marks it seen and lowers the
+tab count without removing it. The Log tab shows persisted tracking and note
+actions. The Lineage graph can show cached working drafts as child nodes via the
+**Include Drafts** filter, renders a post-it badge and matching light background
+tint for the latest note type, and infers LS-in → LS-out reply links from
+matching titles (unverified `based_on` edges). Clicking a draft opens a draft
+detail panel with its artifact metadata and draft-specific notes. Each TDoc detail
+links its official ZIP at `Docs/<tdoc-nr>.zip`.
 Newly arrived files glow in the lineage graph; **Enable alerts** requests browser
 notification permission and raises a desktop notification for each new document.
 Deferred artifacts show as `not fetched` with a fetch button and their FTP upload

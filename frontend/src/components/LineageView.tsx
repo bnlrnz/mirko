@@ -272,6 +272,20 @@ function noteBadgeClass(tag: string | null | undefined): string {
   return "";
 }
 
+function noteTintClass(tag: string | null | undefined): string {
+  const normalized = (tag ?? "").trim().toLowerCase();
+  if (normalized === "object") {
+    return "note-tint-object";
+  }
+  if (normalized === "support") {
+    return "note-tint-support";
+  }
+  if (normalized === "clarify") {
+    return "note-tint-clarify";
+  }
+  return normalized ? "note-tint-note" : "";
+}
+
 function noteBadgeIcon(tag: string | null | undefined) {
   const normalized = (tag ?? "").trim().toLowerCase();
   if (normalized === "object") {
@@ -644,6 +658,10 @@ export function LineageView({
                   } ${node.is_provisional ? "provisional" : ""} ${
                     node.node_kind === "draft" ? "draft" : ""
                   } ${newFile ? "new-file" : ""} ${
+                    node.node_kind === "draft"
+                      ? ""
+                      : noteTintClass(node.note_badge)
+                  } ${
                     node.node_kind === "draft"
                       ? selectedDraft === node.artifact_id
                         ? "selected"

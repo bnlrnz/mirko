@@ -693,6 +693,7 @@ def notifications(
         )
         if created_at < (tracked[tracked_side] or ""):
             continue
+        tracked_node = node(tracked_side)
         items.append(
             {
                 "kind": "lineage",
@@ -703,6 +704,11 @@ def notifications(
                     f"({round(float(edge['confidence']) * 100)}%)"
                 ),
                 "tdocs": [tracked_side, other],
+                "tdoc_titles": {
+                    row["tdoc_number"]: row["title"]
+                    for row in (tracked_node, other_node)
+                    if row is not None and row["title"]
+                },
                 "agenda_item": other_node["agenda_item"],
                 "created_at": created_at,
                 "action": "track",
@@ -730,6 +736,7 @@ def notifications(
                 "title": f"New file for {artifact['tdoc_number']}",
                 "detail": f"{filename}" + (f" · FTP {stamp}" if stamp else ""),
                 "tdocs": [artifact["tdoc_number"]],
+                "tdoc_titles": {artifact["tdoc_number"]: filename},
                 "agenda_item": artifact["agenda_item"],
                 "created_at": artifact["first_seen_at"],
                 "action": None,
@@ -759,6 +766,11 @@ def notifications(
                 ),
                 "detail": f"via {assertion['source']}",
                 "tdocs": [assertion["subject_ref"]],
+                "tdoc_titles": (
+                    {assertion["subject_ref"]: assertion["title"]}
+                    if assertion["title"]
+                    else {}
+                ),
                 "agenda_item": assertion["agenda_item"],
                 "created_at": assertion["observed_at"],
                 "action": None,
