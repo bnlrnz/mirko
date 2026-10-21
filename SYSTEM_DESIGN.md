@@ -683,7 +683,8 @@ Three-pane desktop layout, responsive enough for a narrow window.
 - **Top bar:** meeting selector, Sync Now, sync chip (interval/last/next/health),
   Settings panel (FTP source, mail source, automatic updates and intervals,
   lazy drafts, meeting-bar color, workbook upload), and an **Enable alerts**
-  control for browser notifications. The bar color defaults to `#ffffff`.
+  control for browser notifications. The bar color defaults to `#ffffff` and fades
+  from left to right into white.
 - **Left rail:** compact tracked-favourites list only; a per-row tracking star and
   unread draft/file/merge/revision/link/status markers; double-click centers the
   node in Lineage.

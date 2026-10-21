@@ -35,7 +35,7 @@ function barColors(color: string): CSSProperties {
   const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
   const light = luminance > 0.6;
   return {
-    background: color,
+    background: `linear-gradient(90deg, ${color} 0%, #ffffff 100%)`,
     "--topbar-text": light ? "#1b2430" : "#f8fafc",
     "--topbar-muted": light ? "#475467" : "rgba(248, 250, 252, 0.78)",
     "--topbar-accent": light ? "#2457c5" : "#f8fafc",

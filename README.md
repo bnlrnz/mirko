@@ -61,8 +61,9 @@ refresh the UI afterwards. It is safe to run while the server is idle.
 
 The **Settings** panel in the web UI can edit the FTP and mail sources, enable or
 disable automatic FTP updates, set the meeting and idle update intervals, toggle
-lazy draft fetching, choose the meeting-bar color, and upload the allocation
-workbook for immediate (forced) parsing. Saves are written atomically to
+lazy draft fetching, choose the meeting-bar color (fading right into white), and
+upload the allocation workbook for immediate (forced) parsing. Saves are written
+atomically to
 `meeting.json` with mode `0600`; credentials are never returned by the API.
 
 ## Frontend
