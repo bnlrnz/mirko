@@ -135,6 +135,7 @@ def get_tdoc(connection: sqlite3.Connection, tdoc_number: str) -> dict | None:
         )
     ]
     data["node_status"] = _status_for(connection, "tdoc", tdoc_number)
+    data["is_hidden"] = _hidden_for(connection, "tdoc", tdoc_number)
     data["notes"] = [
         _note_row(note)
         for note in connection.execute(
@@ -203,6 +204,7 @@ def get_draft(connection: sqlite3.Connection, artifact_id: int) -> dict | None:
         "last_seen_at": row["last_seen_at"],
     }
     data["node_status"] = _status_for(connection, "draft", str(artifact_id))
+    data["is_hidden"] = _hidden_for(connection, "draft", str(artifact_id))
     data["notes"] = [
         _note_row(note)
         for note in connection.execute(
@@ -222,6 +224,16 @@ def _status_for(
         (target_kind, target_ref),
     ).fetchone()
     return row["status"] if row is not None else None
+
+
+def _hidden_for(
+    connection: sqlite3.Connection, target_kind: str, target_ref: str
+) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM hidden_node WHERE target_kind = ? AND target_ref = ?",
+        (target_kind, target_ref),
+    ).fetchone()
+    return row is not None
 
 
 def _note_row(row: sqlite3.Row) -> dict:
@@ -445,9 +457,12 @@ def lineage(
             "t.first_seen_at, "
             "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'tdoc' "
             "AND n.target_ref = t.tdoc_number) AS notes_count, "
-            "ns.status AS node_status "
+            "ns.status AS node_status, "
+            "CASE WHEN hn.target_ref IS NULL THEN 0 ELSE 1 END AS is_hidden "
             "FROM tdoc t LEFT JOIN node_status ns "
             "ON ns.target_kind = 'tdoc' AND ns.target_ref = t.tdoc_number "
+            "LEFT JOIN hidden_node hn "
+            "ON hn.target_kind = 'tdoc' AND hn.target_ref = t.tdoc_number "
             "WHERE t.tdoc_number IN ({placeholders}) "
             "ORDER BY COALESCE(t.agenda_item, ''), t.tdoc_number".format(
                 placeholders=placeholders
@@ -468,6 +483,7 @@ def lineage(
                 "first_seen_at": row["first_seen_at"],
                 "notes_count": int(row["notes_count"]),
                 "node_status": row["node_status"],
+                "is_hidden": bool(row["is_hidden"]),
             }
             for row in rows
         ]
@@ -483,10 +499,13 @@ def lineage(
             "a.first_seen_at, a.remote_mtime, t.agenda_item, t.is_tracked, "
             "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'draft' "
             "AND n.target_ref = CAST(a.id AS TEXT)) AS notes_count, "
-            "ns.status AS node_status "
+            "ns.status AS node_status, "
+            "CASE WHEN hn.target_ref IS NULL THEN 0 ELSE 1 END AS is_hidden "
             "FROM artifact a JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
             "LEFT JOIN node_status ns "
             "ON ns.target_kind = 'draft' AND ns.target_ref = CAST(a.id AS TEXT) "
+            "LEFT JOIN hidden_node hn "
+            "ON hn.target_kind = 'draft' AND hn.target_ref = CAST(a.id AS TEXT) "
             "WHERE a.kind = 'working_draft' "
             "ORDER BY a.tdoc_number, a.first_seen_at, a.id"
         )
@@ -507,6 +526,7 @@ def lineage(
                     "first_seen_at": draft["first_seen_at"],
                     "notes_count": int(draft["notes_count"]),
                     "node_status": draft["node_status"],
+                    "is_hidden": bool(draft["is_hidden"]),
                     "node_kind": "draft",
                     "attached_to": draft["tdoc_number"],
                     "artifact_id": int(draft["id"]),
@@ -1017,6 +1037,38 @@ def set_node_status(
     )
     connection.commit()
     return _status_for(connection, target_kind, target_ref)
+
+
+def set_node_hidden(
+    connection: sqlite3.Connection,
+    *,
+    target_kind: str,
+    target_ref: str,
+    hidden: bool,
+) -> bool:
+    if hidden:
+        connection.execute(
+            "INSERT INTO hidden_node(target_kind, target_ref, hidden_at) "
+            "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) "
+            "ON CONFLICT(target_kind, target_ref) DO UPDATE SET "
+            "hidden_at = excluded.hidden_at",
+            (target_kind, target_ref),
+        )
+        action = "node_hidden"
+    else:
+        connection.execute(
+            "DELETE FROM hidden_node WHERE target_kind = ? AND target_ref = ?",
+            (target_kind, target_ref),
+        )
+        action = "node_shown"
+    _record_action(
+        connection,
+        action,
+        target_kind=target_kind,
+        target_ref=target_ref,
+    )
+    connection.commit()
+    return _hidden_for(connection, target_kind, target_ref)
 
 
 def add_note(

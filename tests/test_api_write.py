@@ -169,6 +169,42 @@ def test_track_and_note_endpoints(tmp_path: Path) -> None:
     assert cleared.json()["status"] is None
     assert client.get("/api/tdocs/S3-264202").json()["node_status"] is None
 
+    hidden = client.put(
+        "/api/hidden",
+        json={
+            "target_kind": "tdoc",
+            "target_ref": "S3-264202",
+            "hidden": True,
+        },
+    )
+    assert hidden.status_code == 200, hidden.text
+    assert hidden.json()["hidden"] is True
+    assert client.get("/api/tdocs/S3-264202").json()["is_hidden"] is True
+    nodes = {
+        node["tdoc_number"]: node
+        for node in client.get(
+            "/api/lineage", params={"tracked": "false"}
+        ).json()["nodes"]
+        if node.get("node_kind", "tdoc") == "tdoc"
+    }
+    assert nodes["S3-264202"]["is_hidden"] is True
+
+    shown = client.put(
+        "/api/hidden",
+        json={
+            "target_kind": "tdoc",
+            "target_ref": "S3-264202",
+            "hidden": False,
+        },
+    )
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["hidden"] is False
+    assert client.get("/api/tdocs/S3-264202").json()["is_hidden"] is False
+    assert [item["action"] for item in client.get("/api/log").json()[:2]] == [
+        "node_shown",
+        "node_hidden",
+    ]
+
     assert client.post("/api/tdocs/S3-999999/track").status_code == 404
     assert client.delete("/api/tdocs/S3-999999/track").status_code == 404
     assert (

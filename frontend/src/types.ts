@@ -197,6 +197,7 @@ export interface Conflict {
 export interface TdocDetail extends TdocSummary {
   raw_meta: unknown;
   node_status: NodeStatus | null;
+  is_hidden: boolean;
   artifacts: Artifact[];
   notes: Note[];
   emails: MailSummary[];
@@ -209,6 +210,7 @@ export interface DraftDetail extends Artifact {
   parent_title: string | null;
   agenda_item: string | null;
   node_status: NodeStatus | null;
+  is_hidden: boolean;
   notes: Note[];
 }
 
@@ -237,6 +239,7 @@ export interface LineageNode {
   first_seen_at: string | null;
   notes_count?: number;
   node_status?: NodeStatus | null;
+  is_hidden?: boolean;
   node_kind?: "tdoc" | "draft";
   attached_to?: string | null;
   artifact_id?: number | null;
@@ -284,4 +287,8 @@ export interface Filters {
   source: string;
   tracked: boolean;
   includeEphemeral: boolean;
+  hideWithdrawn: boolean;
+  hideNotTreated: boolean;
+  hideUnknown: boolean;
+  showHidden: boolean;
 }

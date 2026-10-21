@@ -125,6 +125,7 @@ export function CenterPane({
         {tab === "conflicts" ? (
           <ConflictsView
             conflicts={conflicts}
+            lineage={lineage}
             onResolve={onResolve}
             onSelect={onSelect}
           />

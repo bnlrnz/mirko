@@ -63,10 +63,10 @@ def test_create_initializes_database(tmp_path: Path) -> None:
     folder = MeetingFolder.create(tmp_path / "SA3-130", minimal_config())
     connection = folder.connect()
     try:
-        assert schema_version(connection) == 5
+        assert schema_version(connection) == 6
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
     finally:
         connection.close()
 
@@ -145,7 +145,7 @@ def test_open_is_idempotent_for_migrations(tmp_path: Path) -> None:
     try:
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 5
+        ).fetchone()[0] == 6
     finally:
         connection.close()
 

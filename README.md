@@ -79,16 +79,23 @@ link. Unread entries are lightly highlighted; hovering or clicking an entry mark
 it seen and lowers the tab count without removing it. The Log tab shows persisted
 tracking and note actions.
 
-Filters (agenda, type, state, source, tracked only, and **Include Drafts**) live in
-the Lineage toolbar. Draft visibility only affects the graph, never the selected
-node's detail panel. The graph can show cached working drafts as child nodes and
+Filters (agenda, type, state, source, tracked only, **Include Drafts**, **Hide
+withdrawn**, **Hide not treated**, **Hide unknown**, and **Show hidden**) live in
+the Lineage toolbar. Unknown nodes are non-HTML nodes with no path to an HTML node.
+Draft visibility only affects the graph, never the selected node's detail panel.
+**Hide** / **Show** under **Visibility** in the detail panel suppresses or restores
+a TDoc or draft in lineage without deleting it; **Show hidden** reveals explicitly
+hidden nodes. The graph can show cached working drafts as child nodes and
 infers LS-in → LS-out reply links from matching titles (unverified `based_on`
-edges). TDoc and draft nodes share independent status and note features: a
-`Support` / `Object` / `Clarify` status takes visual precedence, while notes alone
-show a post-it badge and light yellow tint. Merged nodes derive their lane from
-the baseline/revised document rather than the first incoming list entry. Clicking
-a draft opens a draft detail panel with its artifact metadata, status, and notes.
-Each TDoc detail links its official ZIP at `Docs/<tdoc-nr>.zip`.
+edges). TDoc and draft nodes share independent action and note features: a
+`Support` / `Object` / `Clarify` action takes visual precedence, while notes alone
+show a post-it badge and light yellow tint. Manual links are entered as a four-digit
+suffix after the meeting prefix and use **revised to**. Merged nodes derive their
+lane from the baseline/revised document rather than the first incoming list entry.
+Clicking a draft opens a draft detail panel with its artifact metadata, action, and
+notes. Each TDoc detail links its official ZIP at `Docs/<tdoc-nr>.zip`.
+The Conflicts tab shows the competing lineage nodes side by side, with each
+assertion's source and confidence; clicking a node opens it in the detail panel.
 Newly arrived files glow in the lineage graph; **Enable alerts** requests browser
 notification permission and raises a desktop notification for each new document.
 Deferred artifacts show as `not fetched` with a fetch button and their FTP upload
@@ -112,8 +119,8 @@ Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
 `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,
 `PATCH /api/assertions/{id}`, `POST /api/conflicts/{id}/resolve`, `POST /api/notes`,
-`PATCH|DELETE /api/notes/{id}`, `PUT /api/status`, `GET|PUT /api/settings`,
-`POST /api/import/excel`, `POST /api/finalize`.
+`PATCH|DELETE /api/notes/{id}`, `PUT /api/status`, `PUT /api/hidden`,
+`GET|PUT /api/settings`, `POST /api/import/excel`, `POST /api/finalize`.
 
 ## Methodology
 

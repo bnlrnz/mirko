@@ -168,6 +168,19 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  setHidden: (body: {
+    target_kind: "tdoc" | "draft";
+    target_ref: string;
+    hidden: boolean;
+  }) =>
+    request<{ target_kind: string; target_ref: string; hidden: boolean }>(
+      "/api/hidden",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   finalize: () =>
     request<{ status: string; export_path: string }>("/api/finalize", {
       method: "POST",

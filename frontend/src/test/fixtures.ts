@@ -91,6 +91,7 @@ export const lineage: Lineage = {
       first_seen_at: "2026-10-16T10:00:00.000000Z",
       notes_count: 1,
       node_status: "Support",
+      is_hidden: false,
     },
     {
       tdoc_number: "S3-264203",
@@ -104,6 +105,7 @@ export const lineage: Lineage = {
       first_seen_at: "2026-10-16T10:05:00.000000Z",
       notes_count: 0,
       node_status: null,
+      is_hidden: false,
     },
   ],
   edges: [
@@ -141,6 +143,7 @@ export const detail: TdocDetail = {
   ...tdocs[0],
   raw_meta: null,
   node_status: "Support",
+  is_hidden: false,
   artifacts: [
     {
       id: 1,
@@ -231,6 +234,7 @@ export const draft: DraftDetail = {
   parent_title: "Original CR",
   agenda_item: "5.3.1.3",
   node_status: "Clarify",
+  is_hidden: false,
   notes: [],
 };
 

@@ -139,6 +139,7 @@ class AssertionSummary(BaseModel):
 class TdocDetail(TdocSummary):
     raw_meta: Any = None
     node_status: str | None = None
+    is_hidden: bool = False
     artifacts: list[ArtifactSummary] = []
     notes: list[NoteSummary] = []
     emails: list[MailSummary] = []
@@ -179,6 +180,7 @@ class LineageNode(BaseModel):
     first_seen_at: str | None = None
     notes_count: int = 0
     node_status: str | None = None
+    is_hidden: bool = False
     node_kind: str = "tdoc"
     attached_to: str | None = None
     artifact_id: int | None = None
@@ -268,6 +270,18 @@ class NodeStatusResponse(BaseModel):
     target_kind: str
     target_ref: str
     status: str | None = None
+
+
+class NodeHiddenRequest(BaseModel):
+    target_kind: Literal["tdoc", "draft"]
+    target_ref: str
+    hidden: bool
+
+
+class NodeHiddenResponse(BaseModel):
+    target_kind: str
+    target_ref: str
+    hidden: bool
 
 
 class AssertionResponse(BaseModel):
@@ -892,6 +906,23 @@ def create_app(
             "target_kind": payload.target_kind,
             "target_ref": payload.target_ref,
             "status": status,
+        }
+
+    @app.put("/api/hidden", response_model=NodeHiddenResponse)
+    def put_hidden(payload: NodeHiddenRequest) -> dict:
+        require_target(payload.target_kind, payload.target_ref)
+        hidden = with_connection(
+            lambda connection: repository.set_node_hidden(
+                connection,
+                target_kind=payload.target_kind,
+                target_ref=payload.target_ref,
+                hidden=payload.hidden,
+            )
+        )
+        return {
+            "target_kind": payload.target_kind,
+            "target_ref": payload.target_ref,
+            "hidden": hidden,
         }
 
     @app.get("/api/conflicts", response_model=list[ConflictResponse])

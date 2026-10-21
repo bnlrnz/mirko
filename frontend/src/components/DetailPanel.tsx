@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   Conflict,
@@ -8,6 +8,7 @@ import type {
   Note,
   TdocDetail,
 } from "../types";
+import { NODE_ACTIONS, NodeStatusIcon } from "./NodeVisuals";
 
 interface NoteTarget {
   kind: "tdoc" | "draft";
@@ -22,12 +23,14 @@ interface Props {
   onTrack: (tdoc: string, tracked: boolean) => void;
   onAddNote: (body: string, target: NoteTarget) => void;
   onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
+  onSetHidden: (hidden: boolean, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
   onAddAssertion: (subject: string, predicate: string, object: string) => void;
   onResolveConflict: (id: number, resolution: ConflictResolution) => void;
   onSelect: (tdoc: string) => void;
   onFetch: () => void;
   fetching: boolean;
+  seriesPrefix: string;
   highlightArtifactId: number | null;
   onClearArtifactHighlight: () => void;
 }
@@ -77,44 +80,111 @@ function value(value: string | number | boolean | null | undefined): string {
   return String(value);
 }
 
-const NODE_STATUSES: NodeStatus[] = ["Support", "Object", "Clarify"];
-
-function StatusSection({
-  status,
+function ActionSection({
+  action,
   target,
-  onSetStatus,
+  onSetAction,
 }: {
-  status: NodeStatus | null;
+  action: NodeStatus | null;
   target: NoteTarget;
-  onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
+  onSetAction: (action: NodeStatus | null, target: NoteTarget) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const current =
+    NODE_ACTIONS.find((option) => option.value === action) ?? NODE_ACTIONS[0];
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const close = (event: MouseEvent) => {
+      if (!menu.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <section>
+      <div className="section-heading">
+        <h3>Action</h3>
+        <div className="action-menu" ref={menu}>
+          <button
+            type="button"
+            className="action-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label="Action"
+            onClick={() => setOpen((value) => !value)}
+          >
+            {current.icon ? (
+              <NodeStatusIcon
+                status={current.value}
+                className={current.className}
+              />
+            ) : null}
+            <span>{current.label}</span>
+            <span className="action-caret" aria-hidden="true">
+              ▾
+            </span>
+          </button>
+          {open ? (
+            <ul className="action-options" role="listbox" aria-label="Actions">
+              {NODE_ACTIONS.map((option) => (
+                <li key={option.label}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={option.value === action}
+                    onClick={() => {
+                      onSetAction(option.value, target);
+                      setOpen(false);
+                    }}
+                  >
+                    {option.icon ? (
+                      <NodeStatusIcon
+                        status={option.value}
+                        className={option.className}
+                      />
+                    ) : (
+                      <span className="action-empty-icon" aria-hidden="true" />
+                    )}
+                    <span>{option.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VisibilitySection({
+  hidden,
+  target,
+  onSetHidden,
+}: {
+  hidden: boolean;
+  target: NoteTarget;
+  onSetHidden: (hidden: boolean, target: NoteTarget) => void;
 }) {
   return (
     <section>
-      <h3>Status</h3>
-      <div className="status-editor">
-        <select
-          aria-label="Status"
-          value={status ?? ""}
-          onChange={(event) =>
-            onSetStatus((event.target.value || null) as NodeStatus | null, target)
-          }
+      <div className="section-heading">
+        <h3>Visibility</h3>
+        <button
+          type="button"
+          aria-pressed={hidden}
+          onClick={() => onSetHidden(!hidden, target)}
         >
-          <option value="">No tag</option>
-          {NODE_STATUSES.map((option) => (
-            <option key={option}>{option}</option>
-          ))}
-        </select>
-        {status ? (
-          <span className={`badge position-${status.toLowerCase()}`}>
-            {status}
-          </span>
-        ) : (
-          <span className="hint">No status set.</span>
-        )}
+          {hidden ? "Show node" : "Hide node"}
+        </button>
       </div>
-      <p className="hint">
-        The node shows this status ahead of its sticky note.
-      </p>
     </section>
   );
 }
@@ -184,6 +254,7 @@ function DraftDetailPanel({
   endpoint,
   onAddNote,
   onSetStatus,
+  onSetHidden,
   onDeleteNote,
   onSelect,
 }: {
@@ -191,6 +262,7 @@ function DraftDetailPanel({
   endpoint: string | null;
   onAddNote: (body: string, target: NoteTarget) => void;
   onSetStatus: (status: NodeStatus | null, target: NoteTarget) => void;
+  onSetHidden: (hidden: boolean, target: NoteTarget) => void;
   onDeleteNote: (id: number) => void;
   onSelect: (tdoc: string) => void;
 }) {
@@ -262,11 +334,18 @@ function DraftDetailPanel({
         </ul>
       </section>
 
-      <StatusSection
-        key={`draft-status:${draft.id}`}
-        status={draft.node_status}
+      <ActionSection
+        key={`draft-action:${draft.id}`}
+        action={draft.node_status}
         target={{ kind: "draft", ref: String(draft.id) }}
-        onSetStatus={onSetStatus}
+        onSetAction={onSetStatus}
+      />
+
+      <VisibilitySection
+        key={`draft-visibility:${draft.id}`}
+        hidden={draft.is_hidden}
+        target={{ kind: "draft", ref: String(draft.id) }}
+        onSetHidden={onSetHidden}
       />
 
       <NoteSection
@@ -288,17 +367,20 @@ export function DetailPanel({
   onTrack,
   onAddNote,
   onSetStatus,
+  onSetHidden,
   onDeleteNote,
   onAddAssertion,
   onResolveConflict,
   onSelect,
   onFetch,
   fetching,
+  seriesPrefix,
   highlightArtifactId,
   onClearArtifactHighlight,
 }: Props) {
   const [predicate, setPredicate] = useState("revision_of");
-  const [linkTarget, setLinkTarget] = useState("");
+  const [linkSuffix, setLinkSuffix] = useState("");
+  const linkTarget = `${seriesPrefix}${linkSuffix}`;
 
   const highlightedArtifactVisible =
     highlightArtifactId !== null &&
@@ -326,6 +408,7 @@ export function DetailPanel({
         endpoint={endpoint}
         onAddNote={onAddNote}
         onSetStatus={onSetStatus}
+        onSetHidden={onSetHidden}
         onDeleteNote={onDeleteNote}
         onSelect={onSelect}
       />
@@ -497,11 +580,18 @@ export function DetailPanel({
         )}
       </section>
 
-      <StatusSection
-        key={`tdoc-status:${detail.tdoc_number}`}
-        status={detail.node_status}
+      <ActionSection
+        key={`tdoc-action:${detail.tdoc_number}`}
+        action={detail.node_status}
         target={{ kind: "tdoc", ref: detail.tdoc_number }}
-        onSetStatus={onSetStatus}
+        onSetAction={onSetStatus}
+      />
+
+      <VisibilitySection
+        key={`tdoc-visibility:${detail.tdoc_number}`}
+        hidden={detail.is_hidden}
+        target={{ kind: "tdoc", ref: detail.tdoc_number }}
+        onSetHidden={onSetHidden}
       />
 
       <NoteSection
@@ -581,12 +671,11 @@ export function DetailPanel({
           className="link-form"
           onSubmit={(event) => {
             event.preventDefault();
-            const target = linkTarget.trim().toUpperCase();
-            if (!target) {
+            if (linkSuffix.length !== 4) {
               return;
             }
-            onAddAssertion(detail.tdoc_number, predicate, target);
-            setLinkTarget("");
+            onAddAssertion(detail.tdoc_number, predicate, linkTarget);
+            setLinkSuffix("");
           }}
         >
           <label>
@@ -596,18 +685,28 @@ export function DetailPanel({
               value={predicate}
               onChange={(event) => setPredicate(event.target.value)}
             >
-              <option value="revision_of">revision of</option>
+              <option value="revision_of">revised to</option>
               <option value="merged_into">merged into</option>
-              <option value="based_on">based on</option>
             </select>
           </label>
-          <input
-            aria-label="Link target"
-            placeholder="S3-264999"
-            value={linkTarget}
-            onChange={(event) => setLinkTarget(event.target.value)}
-          />
-          <button type="submit">Add link</button>
+          <div className="tdoc-input">
+            <span className="tdoc-input-prefix">{seriesPrefix}</span>
+            <input
+              aria-label="Link target"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="4999"
+              value={linkSuffix}
+              onChange={(event) =>
+                setLinkSuffix(
+                  event.target.value.replace(/\D/g, "").slice(0, 4),
+                )
+              }
+            />
+          </div>
+          <button type="submit" disabled={linkSuffix.length !== 4}>
+            Add link
+          </button>
         </form>
       </section>
     </aside>

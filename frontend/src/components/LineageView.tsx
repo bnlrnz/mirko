@@ -1,12 +1,11 @@
-import {
-  faCheck,
-  faNoteSticky,
-  faQuestion,
-  faXmark,
-} from "@fortawesome/free-solid-svg-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Filters, Lineage, LineageEdge, LineageNode } from "../types";
+import {
+  LANE_HEIGHT,
+  LineageNodeGlyph,
+  NODE_WIDTH,
+} from "./NodeVisuals";
 
 interface Props {
   lineage: Lineage;
@@ -30,8 +29,6 @@ interface PositionedNode extends LineageNode {
   depth: number;
 }
 
-const NODE_WIDTH = 190;
-const LANE_HEIGHT = 76;
 const DEPTH_WIDTH = 230;
 const MARGIN = 36;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
@@ -46,7 +43,13 @@ const EMPTY_FILTERS: Filters = {
   source: "",
   tracked: false,
   includeEphemeral: true,
+  hideWithdrawn: false,
+  hideNotTreated: false,
+  hideUnknown: false,
+  showHidden: false,
 };
+const WITHDRAWN_STATES = new Set(["withdrawn", "rejected"]);
+const NOT_TREATED_STATES = new Set(["not treated", "not-treated", "reserved"]);
 
 function draftSortKey(node: LineageNode): string {
   return node.remote_mtime ?? node.first_seen_at ?? "";
@@ -255,21 +258,6 @@ function edgePath(edge: LineageEdge, positions: Map<string, PositionedNode>) {
   return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
 }
 
-const STATE_CLASSES: Record<string, string> = {
-  approved: "state-approved",
-  agreed: "state-approved",
-  "replied to": "state-approved",
-  merged: "state-merged",
-  revised: "state-merged",
-  noted: "state-noted",
-  postponed: "state-noted",
-  "not treated": "state-idle",
-  "not pursued": "state-idle",
-  reserved: "state-idle",
-  withdrawn: "state-negative",
-  rejected: "state-negative",
-};
-
 const LEGEND = [
   ["state-approved", "approved / agreed / replied to"],
   ["state-merged", "merged / revised"],
@@ -277,50 +265,6 @@ const LEGEND = [
   ["state-idle", "not treated / reserved"],
   ["state-negative", "withdrawn / rejected"],
 ] as const;
-
-function decisionClass(node: LineageNode): string {
-  const decision = (node.decision ?? "").trim().toLowerCase();
-  return STATE_CLASSES[decision] ?? "state-idle";
-}
-
-function statusBadgeClass(status: string | null | undefined): string {
-  const normalized = (status ?? "").trim().toLowerCase();
-  if (normalized === "object") {
-    return "status-badge-object";
-  }
-  if (normalized === "support") {
-    return "status-badge-support";
-  }
-  if (normalized === "clarify") {
-    return "status-badge-clarify";
-  }
-  return "";
-}
-
-function hasNodeBadge(node: LineageNode): boolean {
-  return Boolean(node.node_status) || (node.notes_count ?? 0) > 0;
-}
-
-function nodeTintClass(node: LineageNode): string {
-  if (node.node_status) {
-    return `status-tint-${node.node_status.toLowerCase()}`;
-  }
-  return (node.notes_count ?? 0) > 0 ? "note-tint-note" : "";
-}
-
-function nodeBadgeIcon(status: string | null | undefined) {
-  const normalized = (status ?? "").trim().toLowerCase();
-  if (normalized === "object") {
-    return faXmark;
-  }
-  if (normalized === "support") {
-    return faCheck;
-  }
-  if (normalized === "clarify") {
-    return faQuestion;
-  }
-  return faNoteSticky;
-}
 
 function uniqueOptions(values: (string | null | undefined)[]): string[] {
   return [...new Set(values.filter((value): value is string => !!value))].sort();
@@ -342,23 +286,81 @@ function filterMatches(node: LineageNode, filters: Filters): boolean {
   return true;
 }
 
+function htmlConnectedIds(lineage: Lineage): Set<string> {
+  const neighbours = new Map<string, Set<string>>();
+  for (const node of lineage.nodes) {
+    neighbours.set(node.tdoc_number, new Set());
+  }
+  for (const edge of lineage.edges) {
+    neighbours.get(edge.source)?.add(edge.target);
+    neighbours.get(edge.target)?.add(edge.source);
+  }
+  const connected = new Set(
+    lineage.nodes
+      .filter((node) => node.state_source === "html")
+      .map((node) => node.tdoc_number),
+  );
+  const queue = [...connected];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const neighbour of neighbours.get(current) ?? []) {
+      if (!connected.has(neighbour)) {
+        connected.add(neighbour);
+        queue.push(neighbour);
+      }
+    }
+  }
+  return connected;
+}
+
+function hiddenByControls(
+  node: LineageNode,
+  filters: Filters,
+  htmlConnected: ReadonlySet<string>,
+): boolean {
+  if (!filters.showHidden && node.is_hidden) {
+    return true;
+  }
+  if (filters.hideUnknown && !htmlConnected.has(node.tdoc_number)) {
+    return true;
+  }
+  const decision = (node.decision ?? "").trim().toLowerCase();
+  if (filters.hideWithdrawn && WITHDRAWN_STATES.has(decision)) {
+    return true;
+  }
+  if (filters.hideNotTreated && NOT_TREATED_STATES.has(decision)) {
+    return true;
+  }
+  return false;
+}
+
 function filterLineage(lineage: Lineage, filters: Filters): Lineage {
   const active =
-    filters.agenda || filters.type || filters.state || filters.source;
+    Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
+    filters.hideWithdrawn ||
+    filters.hideNotTreated ||
+    filters.hideUnknown ||
+    !filters.showHidden;
   if (!active) {
     return lineage;
   }
+  const htmlConnected = filters.hideUnknown
+    ? htmlConnectedIds(lineage)
+    : new Set<string>();
   const keptTdocs = new Set(
     lineage.nodes
       .filter(
         (node) =>
-          node.node_kind !== "draft" && filterMatches(node, filters),
+          node.node_kind !== "draft" &&
+          filterMatches(node, filters) &&
+          !hiddenByControls(node, filters, htmlConnected),
       )
       .map((node) => node.tdoc_number),
   );
   const nodes = lineage.nodes.filter((node) =>
     node.node_kind === "draft"
-      ? Boolean(node.attached_to && keptTdocs.has(node.attached_to))
+      ? !hiddenByControls(node, filters, htmlConnected) &&
+        Boolean(node.attached_to && keptTdocs.has(node.attached_to))
       : keptTdocs.has(node.tdoc_number),
   );
   const ids = new Set(nodes.map((node) => node.tdoc_number));
@@ -368,35 +370,6 @@ function filterLineage(lineage: Lineage, filters: Filters): Lineage {
       (edge) => ids.has(edge.source) && ids.has(edge.target),
     ),
   };
-}
-
-function NoteBadgeIcon({
-  tag,
-  className,
-}: {
-  tag: string | null | undefined;
-  className: string;
-}) {
-  const icon = nodeBadgeIcon(tag);
-  const [width, height, , , path] = icon.icon;
-  const paths = Array.isArray(path) ? path : [path];
-  return (
-    <svg
-      x={NODE_WIDTH - 26}
-      y={9}
-      width={17}
-      height={17}
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="xMidYMid meet"
-      className={`node-badge-icon ${className}`}
-      aria-hidden="true"
-      focusable="false"
-    >
-      {paths.map((data, index) => (
-        <path key={index} d={data} fill="currentColor" />
-      ))}
-    </svg>
-  );
 }
 
 export function LineageView({
@@ -551,7 +524,11 @@ export function LineageView({
   const hasFilters =
     Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
     filters.tracked ||
-    !filters.includeEphemeral;
+    !filters.includeEphemeral ||
+    filters.hideWithdrawn ||
+    filters.hideNotTreated ||
+    filters.hideUnknown ||
+    filters.showHidden;
 
   const startPan = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
@@ -561,12 +538,11 @@ export function LineageView({
     if (!container) {
       return;
     }
+    stopMomentum();
     const target = event.target as Element;
-    if (target.closest?.(".node")) {
-      stopMomentum();
+    if (!target.closest?.(".lineage-canvas") || target.closest?.(".node")) {
       return;
     }
-    stopMomentum();
     pan.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -632,7 +608,7 @@ export function LineageView({
     const step = (time: number) => {
       const state = momentum.current;
       const container = scrollRef.current;
-      if (!container) {
+      if (!momentumActive.current || !container) {
         stopMomentum();
         return;
       }
@@ -771,6 +747,46 @@ export function LineageView({
           />
           Include Drafts
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            aria-label="Hide withdrawn"
+            checked={filters.hideWithdrawn}
+            onChange={(event) =>
+              setFilter("hideWithdrawn", event.target.checked)
+            }
+          />
+          Hide withdrawn
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            aria-label="Hide not treated"
+            checked={filters.hideNotTreated}
+            onChange={(event) =>
+              setFilter("hideNotTreated", event.target.checked)
+            }
+          />
+          Hide not treated
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            aria-label="Hide unknown"
+            checked={filters.hideUnknown}
+            onChange={(event) => setFilter("hideUnknown", event.target.checked)}
+          />
+          Hide unknown
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            aria-label="Show hidden"
+            checked={filters.showHidden}
+            onChange={(event) => setFilter("showHidden", event.target.checked)}
+          />
+          Show hidden
+        </label>
         <button
           type="button"
           className="lineage-clear"
@@ -780,6 +796,12 @@ export function LineageView({
           Clear
         </button>
       </div>
+      {layout.nodes.length === 0 ? (
+        <div className="lineage-empty-filter">
+          <h3>No nodes match</h3>
+          <p>Adjust the filters or reveal hidden nodes.</p>
+        </div>
+      ) : (
       <div
         ref={scrollRef}
         className={`lineage-scroll${panning ? " panning" : ""}`}
@@ -788,6 +810,7 @@ export function LineageView({
         onPointerMove={movePan}
         onPointerUp={endPan}
         onPointerCancel={endPan}
+        onWheel={stopMomentum}
       >
         <div
           className="lineage-canvas"
@@ -821,119 +844,31 @@ export function LineageView({
                       : false
                     : newArtifactTdocs.has(node.tdoc_number);
                 return (
-                <g
-                  key={node.tdoc_number}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={
-                    node.node_kind === "draft"
-                      ? `draft ${node.title ?? ""} for ${node.attached_to ?? ""} ${
-                          node.status ?? "unknown"
-                        }${node.is_tracked ? " tracked" : ""}${
-                          newFile ? " new file" : ""
-                        }`
-                      : `${node.tdoc_number} ${node.title ?? ""} ${
-                          node.decision ?? "unknown"
-                        }${node.is_tracked ? " tracked" : ""}${
-                          node.is_provisional ? " provisional" : ""
-                        }${newFile ? " new file" : ""}`
-                  }
-                  aria-current={
-                    node.node_kind === "draft"
-                      ? selectedDraft === node.artifact_id
-                        ? true
-                        : undefined
-                      : selected === node.tdoc_number
-                        ? true
-                        : undefined
-                  }
-                  className={`node ${decisionClass(node)} ${
-                    node.is_tracked ? "tracked" : ""
-                  } ${node.is_provisional ? "provisional" : ""} ${
-                    node.node_kind === "draft" ? "draft" : ""
-                  } ${newFile ? "new-file" : ""} ${nodeTintClass(node)} ${
-                    node.node_kind === "draft"
-                      ? selectedDraft === node.artifact_id
-                        ? "selected"
-                        : ""
-                      : selected === node.tdoc_number
-                        ? "selected"
-                        : ""
-                  }`}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  onClick={() => selectNode(node)}
-                  onDoubleClick={() => {
-                    if (node.node_kind !== "draft" && onTrack) {
-                      onTrack(node.tdoc_number, !node.is_tracked);
+                  <LineageNodeGlyph
+                    key={node.tdoc_number}
+                    node={node}
+                    x={node.x}
+                    y={node.y}
+                    selected={
+                      node.node_kind === "draft"
+                        ? selectedDraft === node.artifact_id
+                        : selected === node.tdoc_number
                     }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      selectNode(node);
-                    }
-                  }}
-                >
-                  <rect width={NODE_WIDTH} height={LANE_HEIGHT - 12} rx={9} />
-                  <circle cx={18} cy={18} r={7} className="state-bubble">
-                    <title>{node.decision ?? "unknown"}</title>
-                  </circle>
-                  <text x={32} y={22} className="node-id">
-                    {node.node_kind === "draft" ? "DRAFT" : node.tdoc_number}
-                  </text>
-                  {node.is_tracked && node.node_kind !== "draft" ? (
-                    <text
-                      x={hasNodeBadge(node) ? NODE_WIDTH - 40 : NODE_WIDTH - 16}
-                      y={23}
-                      className="node-star"
-                    >
-                      ★
-                    </text>
-                  ) : null}
-                  {hasNodeBadge(node) ? (
-                    <g
-                      className="node-note-badge"
-                      data-testid={
-                        node.node_status
-                          ? `status-badge-${node.tdoc_number}`
-                          : `note-badge-${node.tdoc_number}`
+                    newFile={newFile}
+                    onClick={() => selectNode(node)}
+                    onDoubleClick={() => {
+                      if (node.node_kind !== "draft" && onTrack) {
+                        onTrack(node.tdoc_number, !node.is_tracked);
                       }
-                    >
-                      <title>
-                        {node.node_status
-                          ? `${node.node_status} status`
-                          : `${node.notes_count ?? 0} ${
-                              (node.notes_count ?? 0) === 1 ? "note" : "notes"
-                            }`}
-                      </title>
-                      <NoteBadgeIcon
-                        tag={node.node_status}
-                        className={
-                          node.node_status
-                            ? statusBadgeClass(node.node_status)
-                            : "note-badge"
-                        }
-                      />
-                    </g>
-                  ) : null}
-                  <text x={14} y={45} className="node-title">
-                    {(node.title ?? "Untitled").slice(0, 26)}
-                  </text>
-                  <text
-                    x={NODE_WIDTH - 12}
-                    y={58}
-                    className="node-state"
-                    textAnchor="end"
-                  >
-                    {node.status ?? node.decision ?? "unknown"}
-                  </text>
-                </g>
+                    }}
+                  />
                 );
               })}
             </g>
           </svg>
         </div>
       </div>
+      )}
     </div>
   );
 }

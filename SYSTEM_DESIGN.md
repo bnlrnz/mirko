@@ -304,6 +304,8 @@ Rules:
 - Conflict resolution is **per predicate/subject**, not per node, and never deletes
   notes or artifacts.
 - The obsolete branch is retained (`active=0`, `muted=1`) and rendered muted/dashed.
+- The Conflicts pane presents the competing nodes side by side with their values,
+  sources, source references, and confidence, and lets the user open either node.
 - All artifacts/notes hang off TDocs/artifacts, not assertions, so resolution cannot
   orphan them.
 
@@ -516,6 +518,7 @@ note(id, target_kind, target_ref, body, author, source,
      created_at, updated_at)
 node_status(target_kind, target_ref, status, updated_at,
             PK(target_kind, target_ref))
+hidden_node(target_kind, target_ref, hidden_at, PK(target_kind, target_ref))
 user_action(id, action, target_kind, target_ref, detail, created_at)
 email(id, message_id PK, thread_id, subject, from_addr, to_addrs, cc_addrs,
       date_utc, agenda_item, meeting_id, body_blob_hash, raw_blob_hash,
@@ -659,6 +662,7 @@ Write:
 - `POST /api/conflicts/{id}/resolve`
 - `POST /api/notes`, `PATCH /api/notes/{id}`, `DELETE /api/notes/{id}`
 - `PUT /api/status` (separate TDoc or draft node status; `null` clears)
+- `PUT /api/hidden` (hide/show a TDoc or draft lineage node)
 - `POST /api/artifacts/{id}/open`
 - `POST /api/sync`
 - `POST /api/tdocs/{tdoc}/fetch?lineage=true` (download deferred artifacts)
@@ -684,13 +688,16 @@ Three-pane desktop layout, responsive enough for a narrow window.
   unread draft/file/merge/revision/link/status markers; double-click centers the
   node in Lineage.
 - **Center:** lineage view (default during meeting) with inline filters (agenda,
-  type, state, source, tracked only, **Include Drafts**) or a sortable table
-  (default for prep). Tabs: **Lineage**, **Timeline**, **Conflicts**,
-  **Notifications**, **Log**. Draft visibility filters only the graph; the detail
-  panel still shows all artifacts for the selected node.
+  type, state, source, tracked only, **Include Drafts**, **Hide withdrawn**,
+  **Hide not treated**, **Hide unknown**, **Show hidden**) or a sortable table
+  (default for prep). Tabs:
+  **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**. Draft
+  visibility filters only the graph; the detail panel still shows all artifacts
+  for the selected node.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
-  separate node status (`Support` / `Object` / `Clarify`), free-text notes,
-  conflict actions. Status and notes are available on TDoc and draft nodes.
+  separate node **Action** (`Support` / `Object` / `Clarify` / **No action**), node
+  **Visibility** (**Hide** / **Show**), free-text notes, conflict actions. Actions
+  and notes are available on TDoc and draft nodes.
 
 ### 12.1 Lineage renderer
 
@@ -707,6 +714,9 @@ Custom SVG lane renderer, not a graph library:
   list entry; `has_draft` = dotted child edge; `based_on` = dashed weak/inferred
   link;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;
+- **Hide unknown** omits non-HTML nodes with no edge path to an HTML-sourced node;
+- explicitly hidden nodes are omitted unless **Show hidden** is checked, and then
+  render with a subdued/manually-hidden style;
 - state bubble colors: approved/agreed/replied-to green, merged/revised light
   green-grey, noted/postponed yellow, not treated/reserved grey,
   withdrawn/rejected red;
@@ -715,7 +725,8 @@ Custom SVG lane renderer, not a graph library:
   use matching very light tints; `Avail`, `Treated`, provisional/unconfirmed, and
   conflict badges remain separate;
 - expand/collapse per tracked set; click-drag on the background pans in all
-  directions with inertia (a click stops the fling); nodes remain clickable;
+  directions with inertia (a click or mouse wheel stops the fling immediately);
+  scrollbars keep their native behavior; nodes remain clickable;
   zoom controls; double-clicking a TDoc in the left list centers the graph on its
   node; double-clicking a lineage node toggles tracking; keyboard navigation;
 - timeline pane synchronized by selection.
@@ -738,8 +749,9 @@ visually distinct.
   changes and note actions are recorded in `user_action` and shown in the Log tab.
 - Each TDoc detail links its official ZIP using the fixed
   `Docs/<tdoc-nr>.zip` path; working draft details do not carry these links.
-- Manual link creation: "revision of" / "merged into" / "merged from", with source
-  badges and an explicit "unverified" state.
+- Manual link creation: **revised to** / "merged into" / "merged from", using the
+  fixed meeting prefix plus a four-digit suffix, with source badges and an explicit
+  "unverified" state.
 - Conflict resolution: accept HTML, keep mine, or repair; the losing branch is
   muted, never deleted.
 - Everything is keyboard-reachable; no modal traps for routine work.

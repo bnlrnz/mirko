@@ -25,6 +25,7 @@ function json(data: unknown): Response {
 }
 
 function installFetch() {
+  let nodeHidden = false;
   const mock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -34,6 +35,15 @@ function installFetch() {
       if (url === "/api/status" && method === "PUT") {
         const body = JSON.parse(String(init?.body ?? "{}"));
         return json(body);
+      }
+      if (url === "/api/hidden" && method === "PUT") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        nodeHidden = Boolean(body.hidden);
+        return json({
+          target_kind: body.target_kind,
+          target_ref: body.target_ref,
+          hidden: nodeHidden,
+        });
       }
       if (url === "/api/settings" && method === "PUT") {
         const body = JSON.parse(String(init?.body ?? "{}"));
@@ -110,6 +120,7 @@ function installFetch() {
       if (url === "/api/tdocs/S3-264203") {
         return json({
           ...detail,
+          is_hidden: nodeHidden,
           tdoc_number: "S3-264203",
           title: "Revised CR",
           decision: "agreed",
@@ -117,7 +128,9 @@ function installFetch() {
         });
       }
       if (url === "/api/tdocs/S3-264203/timeline") return json(timeline);
-      if (url === "/api/tdocs/S3-264202") return json(detail);
+      if (url === "/api/tdocs/S3-264202") {
+        return json({ ...detail, is_hidden: nodeHidden });
+      }
       if (url === "/api/tdocs/S3-264202/timeline") return json(timeline);
       return json({});
     },
@@ -390,11 +403,33 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /Conflicts/ }));
     const list = await screen.findByLabelText("Open conflicts");
     expect(within(list).getByText("decision")).toBeInTheDocument();
+    const choices = within(list).getByLabelText(
+      "Competing nodes for S3-264202",
+    );
+    expect(within(choices).getAllByRole("button")).toHaveLength(2);
+    expect(within(choices).getByText("html")).toBeInTheDocument();
+    expect(within(choices).getByText("user")).toBeInTheDocument();
+    expect(
+      within(choices).getByRole("button", {
+        name: "Open S3-264202 from user",
+      }),
+    ).toHaveTextContent("agreed");
+    expect(
+      within(choices).getByRole("button", {
+        name: "Open S3-264202 from html",
+      }),
+    ).toHaveTextContent("revised");
 
+    fireEvent.click(
+      within(choices).getByRole("button", { name: "Open S3-264202 from user" }),
+    );
+    expect(
+      await screen.findByLabelText("Detail for S3-264202"),
+    ).toBeInTheDocument();
     fireEvent.click(within(list).getByRole("button", { name: "Keep mine" }));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Keep mine" }),
+        within(list).getByRole("button", { name: "Keep mine" }),
       ).toBeInTheDocument(),
     );
   });
@@ -405,13 +440,29 @@ describe("App", () => {
     fireEvent.click(within(rail).getByText("S3-264202"));
     const panel = await screen.findByLabelText("Detail for S3-264202");
 
+    expect(
+      within(panel).getByRole("option", { name: "revised to" }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).queryByRole("option", { name: "based on" }),
+    ).not.toBeInTheDocument();
     fireEvent.change(within(panel).getByLabelText("Link target"), {
-      target: { value: "S3-264999" },
+      target: { value: "4999" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Add link" }));
-    await waitFor(() =>
-      expect(within(panel).getByLabelText("Link target")).toHaveValue(""),
-    );
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/assertions" && init?.method === "POST",
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        subject_ref: "S3-264202",
+        predicate: "revision_of",
+        object_kind: "tdoc",
+        object_ref: "S3-264999",
+      });
+    });
+    expect(within(panel).getByLabelText("Link target")).toHaveValue("");
   });
 
   it("deletes a note from the detail panel", async () => {
@@ -425,16 +476,39 @@ describe("App", () => {
     );
   });
 
+  it("hides a node from lineage in the detail panel", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    fireEvent.click(within(panel).getByRole("button", { name: "Hide node" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/api/hidden" && init?.method === "PUT",
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        target_kind: "tdoc",
+        target_ref: "S3-264202",
+        hidden: true,
+      });
+    });
+    expect(
+      await within(panel).findByRole("button", { name: "Show node" }),
+    ).toBeInTheDocument();
+  });
+
   it("sets a TDoc status separately from its notes", async () => {
     render(<App />);
     const rail = await screen.findByLabelText("Tracked TDoc favourites");
     fireEvent.click(within(rail).getByText("S3-264202"));
     const panel = await screen.findByLabelText("Detail for S3-264202");
-    expect(within(panel).getByLabelText("Status")).toHaveValue("Support");
+    expect(
+      within(panel).getByRole("button", { name: "Action" }),
+    ).toHaveTextContent("Support");
     expect(within(panel).queryByLabelText("Position tag")).not.toBeInTheDocument();
-    fireEvent.change(within(panel).getByLabelText("Status"), {
-      target: { value: "Object" },
-    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Action" }));
+    fireEvent.click(within(panel).getByRole("option", { name: "Object" }));
     await waitFor(() => {
       const statusCall = fetchMock.mock.calls.find(
         (call) =>
@@ -540,9 +614,11 @@ describe("App", () => {
     expect(
       within(panel).queryByRole("link", { name: /S3-264203\.zip/ }),
     ).not.toBeInTheDocument();
-    fireEvent.change(within(panel).getByLabelText("Status"), {
-      target: { value: "Object" },
-    });
+    expect(
+      within(panel).getByRole("button", { name: "Action" }),
+    ).toHaveTextContent("Clarify");
+    fireEvent.click(within(panel).getByRole("button", { name: "Action" }));
+    fireEvent.click(within(panel).getByRole("option", { name: "Object" }));
     await waitFor(() => {
       const statusCall = fetchMock.mock.calls.find(
         (call) =>

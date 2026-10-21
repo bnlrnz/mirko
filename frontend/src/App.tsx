@@ -31,6 +31,10 @@ const EMPTY_FILTERS: Filters = {
   source: "",
   tracked: false,
   includeEphemeral: true,
+  hideWithdrawn: false,
+  hideNotTreated: false,
+  hideUnknown: false,
+  showHidden: false,
 };
 
 function sendSystemNotification(
@@ -473,6 +477,30 @@ export default function App() {
     [refreshStatic, refreshTdocs],
   );
 
+  const onSetHidden = useCallback(
+    async (
+      hidden: boolean,
+      target: { kind: "tdoc" | "draft"; ref: string },
+    ) => {
+      try {
+        await api.setHidden({
+          target_kind: target.kind,
+          target_ref: target.ref,
+          hidden,
+        });
+        if (target.kind === "tdoc") {
+          setDetail(await api.tdoc(target.ref));
+        } else {
+          setDraft(await api.draft(Number(target.ref)));
+        }
+        await Promise.all([refreshStatic(), refreshTdocs()]);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refreshStatic, refreshTdocs],
+  );
+
   const onDeleteNote = useCallback(
     async (noteId: number) => {
       try {
@@ -691,12 +719,14 @@ export default function App() {
           onTrack={onTrack}
           onAddNote={onAddNote}
           onSetStatus={onSetStatus}
+          onSetHidden={onSetHidden}
           onDeleteNote={onDeleteNote}
           onAddAssertion={onAddAssertion}
           onResolveConflict={onResolveConflict}
           onSelect={onSelect}
           onFetch={onFetch}
           fetching={fetching}
+          seriesPrefix={meeting?.tdoc_series_prefix ?? ""}
           highlightArtifactId={highlightArtifact}
           onClearArtifactHighlight={clearArtifactHighlight}
         />

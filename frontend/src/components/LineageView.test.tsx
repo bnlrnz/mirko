@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LineageView, chainDrafts, layoutLineage } from "./LineageView";
@@ -77,6 +78,10 @@ describe("LineageView", () => {
           source: "",
           tracked: false,
           includeEphemeral: true,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: false,
+          showHidden: false,
         }}
         onSelect={vi.fn()}
       />,
@@ -171,6 +176,10 @@ describe("LineageView", () => {
           source: "",
           tracked: false,
           includeEphemeral: true,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: false,
+          showHidden: false,
         }}
         onSelect={onSelect}
         onSelectDraft={onSelectDraft}
@@ -211,6 +220,10 @@ describe("LineageView", () => {
           source: "",
           tracked: false,
           includeEphemeral: false,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: false,
+          showHidden: false,
         }}
         onSelect={onSelect}
       />,
@@ -408,6 +421,10 @@ describe("LineageView", () => {
           source: "",
           tracked: false,
           includeEphemeral: true,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: false,
+          showHidden: false,
         }}
         onSelect={vi.fn()}
         onSelectDraft={vi.fn()}
@@ -469,16 +486,17 @@ describe("LineageView", () => {
   it("pans the canvas by click and drag", () => {
     render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
     const canvas = screen.getByTestId("lineage-scroll");
+    const surface = canvas.querySelector(".lineage-canvas") as Element;
     canvas.scrollLeft = 100;
     canvas.scrollTop = 50;
 
-    fireEvent.pointerDown(canvas, {
+    fireEvent.pointerDown(surface, {
       button: 0,
       clientX: 200,
       clientY: 200,
       pointerId: 1,
     });
-    fireEvent.pointerMove(canvas, {
+    fireEvent.pointerMove(surface, {
       clientX: 150,
       clientY: 160,
       pointerId: 1,
@@ -487,7 +505,31 @@ describe("LineageView", () => {
     expect(canvas.scrollLeft).toBe(150);
     expect(canvas.scrollTop).toBe(90);
     expect(canvas).toHaveClass("panning");
+    fireEvent.pointerUp(surface, { pointerId: 1 });
+    expect(canvas).not.toHaveClass("panning");
+  });
+
+  it("leaves scrollbar dragging to the native scroller", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const canvas = screen.getByTestId("lineage-scroll");
+    canvas.scrollLeft = 100;
+    canvas.scrollTop = 50;
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      clientX: 500,
+      clientY: 300,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(canvas, {
+      clientX: 450,
+      clientY: 250,
+      pointerId: 1,
+    });
     fireEvent.pointerUp(canvas, { pointerId: 1 });
+
+    expect(canvas.scrollLeft).toBe(100);
+    expect(canvas.scrollTop).toBe(50);
     expect(canvas).not.toHaveClass("panning");
   });
 
@@ -522,6 +564,7 @@ describe("LineageView", () => {
   it("keeps momentum after a fling and stops it on click", () => {
     render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
     const canvas = screen.getByTestId("lineage-scroll");
+    const surface = canvas.querySelector(".lineage-canvas") as Element;
     canvas.scrollLeft = 100;
 
     let clock = 0;
@@ -533,20 +576,20 @@ describe("LineageView", () => {
     });
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
 
-    fireEvent.pointerDown(canvas, {
+    fireEvent.pointerDown(surface, {
       button: 0,
       clientX: 400,
       clientY: 400,
       pointerId: 1,
     });
     clock = 100;
-    fireEvent.pointerMove(canvas, {
+    fireEvent.pointerMove(surface, {
       clientX: 200,
       clientY: 200,
       pointerId: 1,
     });
-    fireEvent.pointerUp(canvas, { pointerId: 1 });
-    fireEvent.click(canvas);
+    fireEvent.pointerUp(surface, { pointerId: 1 });
+    fireEvent.click(surface);
 
     expect(frames).toHaveLength(1);
     frames[0](116);
@@ -554,14 +597,54 @@ describe("LineageView", () => {
     const flinging = canvas.scrollLeft;
 
     clock = 116;
-    fireEvent.pointerDown(canvas, {
+    fireEvent.pointerDown(surface, {
       button: 0,
       clientX: 300,
       clientY: 300,
       pointerId: 2,
     });
-    fireEvent.pointerUp(canvas, { pointerId: 2 });
-    fireEvent.click(canvas);
+    fireEvent.pointerUp(surface, { pointerId: 2 });
+    fireEvent.click(surface);
+    expect(canvas.scrollLeft).toBe(flinging);
+
+    now.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it("stops a fling when the mouse wheel scrolls", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const canvas = screen.getByTestId("lineage-scroll");
+    const surface = canvas.querySelector(".lineage-canvas") as Element;
+    canvas.scrollLeft = 100;
+
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+
+    fireEvent.pointerDown(surface, {
+      button: 0,
+      clientX: 400,
+      clientY: 400,
+      pointerId: 1,
+    });
+    clock = 100;
+    fireEvent.pointerMove(surface, {
+      clientX: 200,
+      clientY: 200,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(surface, { pointerId: 1 });
+
+    frames[0](116);
+    const flinging = canvas.scrollLeft;
+    fireEvent.wheel(canvas, { deltaY: 100 });
+    clock = 132;
+    frames[1](132);
     expect(canvas.scrollLeft).toBe(flinging);
 
     now.mockRestore();
@@ -592,5 +675,206 @@ describe("LineageView", () => {
     expect(onSelect).toHaveBeenCalledWith("S3-264203");
     fireEvent.click(screen.getByRole("button", { name: "+" }));
     expect(screen.getByRole("button", { name: "Reset" })).toBeInTheDocument();
+  });
+
+  it("hides withdrawn and not-treated nodes through the lineage controls", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      { ...base, tdoc_number: "S3-264210", title: "Withdrawn CR", decision: "withdrawn" },
+      { ...base, tdoc_number: "S3-264211", title: "Rejected CR", decision: "rejected" },
+      { ...base, tdoc_number: "S3-264212", title: "Untreated CR", decision: "not treated" },
+      { ...base, tdoc_number: "S3-264213", title: "Reserved CR", decision: "reserved" },
+      { ...base, tdoc_number: "S3-264214", title: "Agreed CR", decision: "agreed" },
+    ].map((node) => ({ ...node, is_tracked: false, is_hidden: false }));
+
+    function Harness() {
+      const [filters, setFilters] = useState({
+        agenda: "",
+        type: "",
+        state: "",
+        source: "",
+        tracked: false,
+        includeEphemeral: true,
+        hideWithdrawn: false,
+        hideNotTreated: false,
+        hideUnknown: false,
+        showHidden: false,
+      });
+      return (
+        <LineageView
+          lineage={{ nodes, edges: [] }}
+          selected={null}
+          filters={filters}
+          onFilters={setFilters}
+          onSelect={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    expect(screen.getByText("5 nodes")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Hide withdrawn" }),
+    );
+    expect(screen.getByText("3 nodes")).toBeInTheDocument();
+    expect(screen.queryByText("Withdrawn CR")).not.toBeInTheDocument();
+    expect(screen.queryByText("Rejected CR")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Hide not treated" }),
+    );
+    expect(screen.getByText("1 nodes")).toBeInTheDocument();
+    expect(screen.queryByText("Untreated CR")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reserved CR")).not.toBeInTheDocument();
+    expect(screen.getByText("Agreed CR")).toBeInTheDocument();
+  });
+
+  it("hides explicitly hidden nodes until Show hidden is enabled", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264220",
+        title: "Visible CR",
+        decision: "agreed",
+        is_tracked: false,
+        is_hidden: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264221",
+        title: "Hidden CR",
+        decision: "agreed",
+        is_tracked: false,
+        is_hidden: true,
+      },
+    ];
+    const filters = {
+      agenda: "",
+      type: "",
+      state: "",
+      source: "",
+      tracked: false,
+      includeEphemeral: true,
+      hideWithdrawn: false,
+      hideNotTreated: false,
+      hideUnknown: false,
+      showHidden: false,
+    };
+    const { rerender } = render(
+      <LineageView
+        lineage={{ nodes, edges: [] }}
+        selected={null}
+        filters={filters}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("1 nodes")).toBeInTheDocument();
+    expect(screen.getByText("Visible CR")).toBeInTheDocument();
+    expect(screen.queryByText("Hidden CR")).not.toBeInTheDocument();
+
+    rerender(
+      <LineageView
+        lineage={{ nodes, edges: [] }}
+        selected={null}
+        filters={{ ...filters, showHidden: true }}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("2 nodes")).toBeInTheDocument();
+    const hidden = screen.getByRole("button", {
+      name: /S3-264221 Hidden CR agreed hidden/,
+    });
+    expect(hidden).toHaveClass("manually-hidden");
+  });
+
+  it("hides unknown nodes with no path to an HTML node", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264230",
+        title: "HTML CR",
+        decision: "agreed",
+        state_source: "html",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264231",
+        title: "Linked CR",
+        decision: "revised",
+        state_source: "filename",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264232",
+        title: "Unknown CR",
+        decision: "revised",
+        state_source: "filename",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "draft:9",
+        title: "draft S3-264230-r1.docx",
+        decision: "present",
+        status: "present",
+        state_source: "artifact",
+        node_kind: "draft" as const,
+        attached_to: "S3-264230",
+        artifact_id: 9,
+        is_tracked: false,
+        is_hidden: false,
+      },
+    ];
+    render(
+      <LineageView
+        lineage={{
+          nodes,
+          edges: [
+            {
+              source: "S3-264231",
+              target: "S3-264230",
+              kind: "revision_of",
+              confidence: 1,
+              verified: true,
+              source_ref: null,
+            },
+            {
+              source: "S3-264230",
+              target: "draft:9",
+              kind: "has_draft",
+              confidence: 1,
+              verified: true,
+              source_ref: null,
+            },
+          ],
+        }}
+        selected={null}
+        filters={{
+          agenda: "",
+          type: "",
+          state: "",
+          source: "",
+          tracked: false,
+          includeEphemeral: true,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: true,
+          showHidden: false,
+        }}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("3 nodes")).toBeInTheDocument();
+    expect(screen.getByText("HTML CR")).toBeInTheDocument();
+    expect(screen.getByText("Linked CR")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /draft draft S3-264230-r1.docx for S3-264230 present/,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Unknown CR")).not.toBeInTheDocument();
   });
 });
