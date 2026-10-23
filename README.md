@@ -40,7 +40,8 @@ downloaded on demand. Agenda HTML and Inbox mail remain eager.
 - `mirko/ingest/filename.py`, `filename_ingest.py` — filename parser, ephemeral draft
   artifacts, provisional numbers and ghost hints.
 - `mirko/ingest/mail_subject.py`, `mail_ingest.py` — RFC2047 subjects/threading and
-  mentions from mbox, a single `.eml` file, or `.eml` trees.
+  mentions from mbox files, recursive mbox directories (including Thunderbird
+  `.sbd` subfolders), a single `.eml` file, or `.eml` trees.
 - `mirko/worker.py` — one sync + ingestion cycle with sync-state health.
 - `mirko/repository.py`, `api.py` — read models and typed JSON API under `/api`.
 - `mirko/export.py` — deterministic Markdown export, finalize/archive, mirror.
@@ -62,7 +63,9 @@ refresh the UI afterwards. It is safe to run while the server is idle.
 The **Settings** panel in the web UI can edit the FTP and mail sources, enable or
 disable automatic FTP updates, set the meeting and idle update intervals, toggle
 lazy draft fetching, choose the meeting-bar color (fading right into white), and
-upload the allocation workbook for immediate (forced) parsing. Saves are written
+upload the allocation workbook for immediate (forced) parsing. An mbox source may
+be a single file or a directory; Thunderbird folder files also include their
+sibling `.sbd` subfolders, and `.msf` indexes are skipped. Saves are written
 atomically to
 `meeting.json` with mode `0600`; credentials are never returned by the API.
 
@@ -77,15 +80,20 @@ favourite centers its lineage node. Tracking a TDoc expands to its connected
 lineage component. The Notifications tab lists new files, decisions, and newly
 connected nodes for that tracked set, with the document title beside each TDoc
 link. Unread entries are lightly highlighted; hovering or clicking an entry marks
-it seen and lowers the tab count without removing it. The Log tab shows persisted
+it seen and lowers the tab count without removing it. Seen state is stored in the
+meeting database, so it survives reloads and restarts. The Log tab shows persisted
 tracking and note actions.
 
 Filters (agenda, type, state, source, tracked only, **Include Drafts**, **Hide
 withdrawn**, **Hide not treated**, **Hide unknown**, and **Show hidden**) live in
-the Lineage toolbar. The source filter splits the agenda's comma-separated source
-field into individual company names, so a TDoc submitted by `Huawei, HiSilicon`
-matches both `Huawei` and `HiSilicon`. The **+** control creates additional lineage
-tabs, each with its own independent filter set, so different views (for example one
+the Lineage toolbar. Agenda, type, state, and source are checkbox lists: selecting
+several values matches any of them, while selections in different lists are
+combined. Agenda options follow the meeting's section numbering (`5.1.2` before
+`5.1.10`) and show the agenda topic beside the number. The source list splits the
+agenda's comma-separated source field into individual company names, so a TDoc
+submitted by `Huawei, HiSilicon` matches both `Huawei` and `HiSilicon`. The **+**
+control creates additional lineage tabs, each with its own independent filter set,
+so different views (for example one
 agenda item and one tracked-only view) can be kept side by side. Double-click a tab
 label or use its pencil control to rename it; close extra tabs with the × control.
 Tab names, filters, and the active lineage view are stored in `meeting.json` under
@@ -97,7 +105,14 @@ Draft visibility only affects the graph, never the selected node's detail panel.
 a TDoc or draft in lineage without deleting it; **Show hidden** reveals explicitly
 hidden nodes. The graph can show cached working drafts as child nodes and
 infers LS-in → LS-out reply links from matching titles (unverified `based_on`
-edges). TDoc and draft nodes share independent action and note features: a
+edges). Emails linked to a TDoc on a visible edge appear as envelope markers in
+timeline order; several mails on one edge collapse into a bulk envelope that
+expands to individual messages. With drafts shown, mails are spread across the
+draft segments that match their timestamps; hiding drafts collects them back
+onto the TDoc edge. Hovering a marker previews the subject and sender, clicking a
+message opens the same mail-body dialog used in the detail panel, and clicking
+anywhere else collapses an expanded bundle. TDoc and draft nodes share
+independent action and note features: a
 `Support` / `Object` / `Clarify` action takes visual precedence, while notes alone
 show a post-it badge and light yellow tint. Manual links are entered as a four-digit
 suffix after the meeting prefix and use **revised to**. Merged nodes derive their
@@ -123,7 +138,8 @@ nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flak
 
 Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc}`,
 `/api/drafts/{artifact_id}`, `/api/tdocs/{tdoc}/timeline`, `/api/lineage`,
-`/api/lineage-views`, `/api/mail`, `/api/discovery`, `/api/conflicts`, `/api/log`,
+`/api/lineage-views`, `/api/mail`, `/api/mail/{email_id}`, `/api/discovery`,
+`/api/conflicts`, `/api/log`,
 `/api/sync/status`, `/api/export/markdown`, `/api/events` (SSE).
 
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,

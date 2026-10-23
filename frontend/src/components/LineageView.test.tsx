@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LineageView, chainDrafts, layoutLineage } from "./LineageView";
 import { lineage } from "../test/fixtures";
-import type { Lineage } from "../types";
+import type { Filters, Lineage } from "../types";
 
 describe("LineageView", () => {
   it("lays out a revision chain on one lane", () => {
@@ -15,20 +15,34 @@ describe("LineageView", () => {
     expect(second.depth).toBeGreaterThan(first.depth);
   });
 
-  it("orders root lanes by the supplied favourite order", () => {
+  it("keeps tracked nodes in agenda order", () => {
     const base = lineage.nodes[0];
-    const nodes = ["S3-264300", "S3-264301", "S3-264302"].map(
-      (tdoc_number) => ({ ...base, tdoc_number }),
-    );
-    const layout = layoutLineage(
-      { nodes, edges: [] },
-      ["S3-264301", "S3-264302", "S3-264300"],
-    );
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264300",
+        agenda_item: "1",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264301",
+        agenda_item: "2",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264302",
+        agenda_item: "3",
+        is_tracked: true,
+      },
+    ];
+    const layout = layoutLineage({ nodes, edges: [] });
     const lanes = layout.nodes.map((node) => [node.tdoc_number, node.lane]);
     expect(lanes).toEqual([
-      ["S3-264301", 0],
-      ["S3-264302", 1],
-      ["S3-264300", 2],
+      ["S3-264300", 0],
+      ["S3-264301", 1],
+      ["S3-264302", 2],
     ]);
   });
 
@@ -66,16 +80,112 @@ describe("LineageView", () => {
     expect(lanes.get("S3-264302")).not.toBe(lanes.get("S3-264300"));
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows edge mail previews and expands a mail bundle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ body: "Hello from Alice" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    render(
+      <LineageView
+        lineage={lineage}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    const bulk = screen.getByRole("button", {
+      name: "Mail bundle: 2 mails",
+    });
+    fireEvent.mouseEnter(bulk);
+    const preview = screen.getByRole("tooltip");
+    expect(preview).toHaveTextContent("[SA3#130][S3-264202] CR on QUIC");
+    expect(preview).toHaveTextContent("Alice <alice@example.org>");
+    expect(preview).toHaveTextContent("Revised draft available");
+    expect(preview).toHaveTextContent("Bob <bob@example.org>");
+    fireEvent.mouseLeave(bulk);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.click(bulk);
+    expect(
+      screen.getByRole("button", {
+        name: /^Mail: .* CR on QUIC/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /^Mail: .* Revised draft available/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Mail bundle: 2 mails",
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: /S3-264203/ }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Mail bundle: 2 mails" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Mail bundle: 2 mails" }),
+    );
+    fireEvent.pointerDown(screen.getByTestId("lineage-scroll"));
+    expect(
+      screen.getByRole("button", { name: "Mail bundle: 2 mails" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /^Mail: .* CR on QUIC/,
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Mail bundle: 2 mails" }),
+    );
+    const reopened = screen.getByRole("button", {
+      name: /^Mail: .* CR on QUIC/,
+    });
+    fireEvent.click(reopened);
+    const dialog = await screen.findByRole("dialog", {
+      name: /Mail: .* CR on QUIC/,
+    });
+    expect(await screen.findByText("Hello from Alice")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Mail bundle: 2 mails",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /^Mail: .* CR on QUIC/,
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  });
+
   it("filters visible nodes by the lineage categories", () => {
     render(
       <LineageView
         lineage={lineage}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "agreed",
-          source: "",
+          agenda: [],
+          type: [],
+          state: ["agreed"],
+          source: [],
           tracked: false,
           includeEphemeral: true,
           hideWithdrawn: false,
@@ -92,7 +202,40 @@ describe("LineageView", () => {
     expect(
       screen.queryByTestId("edge-S3-264202-S3-264203"),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
+    const state = screen.getByRole("group", { name: "State filter" });
+    expect(
+      within(state).getByRole("checkbox", { name: "agreed" }),
+    ).toBeChecked();
+    expect(
+      within(state).getByRole("checkbox", { name: "revised" }),
+    ).not.toBeChecked();
+  });
+
+  it("groups display toggles in their own filter section", () => {
+    render(
+      <LineageView
+        lineage={lineage}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    );
+    const display = screen.getByRole("group", { name: "Display options" });
+    for (const label of [
+      "Tracked only",
+      "Include Drafts",
+      "Hide withdrawn",
+      "Hide not treated",
+      "Hide unknown",
+      "Show hidden",
+    ]) {
+      expect(
+        within(display).getByRole("checkbox", { name: label }),
+      ).toBeInTheDocument();
+    }
+    const source = screen.getByRole("group", { name: "Source filter" });
+    expect(
+      within(source).queryByRole("checkbox", { name: "Tracked only" }),
+    ).not.toBeInTheDocument();
   });
 
   it("filters to tracked nodes and their direct lineage neighbours", () => {
@@ -140,10 +283,10 @@ describe("LineageView", () => {
         }}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "",
-          source: "",
+          agenda: [],
+          type: [],
+          state: [],
+          source: [],
           tracked: true,
           includeEphemeral: true,
           hideWithdrawn: false,
@@ -157,6 +300,87 @@ describe("LineageView", () => {
     expect(screen.getByText("Tracked CR")).toBeInTheDocument();
     expect(screen.getByText("Neighbour CR")).toBeInTheDocument();
     expect(screen.queryByText("Isolated CR")).not.toBeInTheDocument();
+  });
+
+  it("orders agenda options numerically and shows their topics", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264310",
+        title: "Tenth agenda CR",
+        agenda_item: "5.1.10",
+        topic: "Tenth topic",
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264311",
+        title: "Second agenda CR",
+        agenda_item: "5.1.2",
+        topic: "Second topic",
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264312",
+        title: "First agenda CR",
+        agenda_item: "5.1.1",
+        topic: "First topic",
+      },
+    ];
+
+    function Harness() {
+      const [filters, setFilters] = useState<Filters>({
+        agenda: [],
+        type: [],
+        state: [],
+        source: [],
+        tracked: false,
+        includeEphemeral: true,
+        hideWithdrawn: false,
+        hideNotTreated: false,
+        hideUnknown: false,
+        showHidden: false,
+      });
+      return (
+        <LineageView
+          lineage={{ nodes, edges: [] }}
+          selected={null}
+          filters={filters}
+          onFilters={setFilters}
+          onSelect={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const agenda = screen.getByRole("group", { name: "Agenda filter" });
+    expect(
+      within(agenda)
+        .getAllByRole("checkbox")
+        .map((checkbox) => [
+          (checkbox as HTMLInputElement).value,
+          checkbox.closest("label")?.textContent?.trim(),
+        ]),
+    ).toEqual([
+      ["5.1.1", "5.1.1 — First topic"],
+      ["5.1.2", "5.1.2 — Second topic"],
+      ["5.1.10", "5.1.10 — Tenth topic"],
+    ]);
+
+    fireEvent.click(
+      within(agenda).getByRole("checkbox", {
+        name: "5.1.1 — First topic",
+      }),
+    );
+    fireEvent.click(
+      within(agenda).getByRole("checkbox", {
+        name: "5.1.2 — Second topic",
+      }),
+    );
+    expect(screen.getByText("First agenda CR")).toBeInTheDocument();
+    expect(screen.getByText("Second agenda CR")).toBeInTheDocument();
+    expect(screen.queryByText("Tenth agenda CR")).not.toBeInTheDocument();
   });
 
   it("treats comma-separated sources as individual company filters", () => {
@@ -179,11 +403,11 @@ describe("LineageView", () => {
     ];
 
     function Harness() {
-      const [filters, setFilters] = useState({
-        agenda: "",
-        type: "",
-        state: "",
-        source: "",
+      const [filters, setFilters] = useState<Filters>({
+        agenda: [],
+        type: [],
+        state: [],
+        source: [],
         tracked: false,
         includeEphemeral: true,
         hideWithdrawn: false,
@@ -203,20 +427,36 @@ describe("LineageView", () => {
     }
 
     render(<Harness />);
-    const source = screen.getByLabelText("Source filter");
+    const source = screen.getByRole("group", { name: "Source filter" });
     expect(
-      within(source).queryByRole("option", { name: "Huawei, HiSilicon" }),
+      within(source).queryByRole("checkbox", {
+        name: "Huawei, HiSilicon",
+      }),
     ).not.toBeInTheDocument();
     expect(
-      within(source).getByRole("option", { name: "Huawei" }),
+      within(source).getByRole("checkbox", { name: "Huawei" }),
     ).toBeInTheDocument();
     expect(
-      within(source).getByRole("option", { name: "HiSilicon" }),
+      within(source).getByRole("checkbox", { name: "HiSilicon" }),
     ).toBeInTheDocument();
 
-    fireEvent.change(source, { target: { value: "HiSilicon" } });
+    fireEvent.click(
+      within(source).getByRole("checkbox", { name: "HiSilicon" }),
+    );
     expect(screen.getByText("Combined source CR")).toBeInTheDocument();
     expect(screen.queryByText("Nokia CR")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(source).getByRole("checkbox", { name: "Nokia" }),
+    );
+    expect(screen.getByText("Combined source CR")).toBeInTheDocument();
+    expect(screen.getByText("Nokia CR")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(source).getByRole("checkbox", { name: "HiSilicon" }),
+    );
+    expect(screen.queryByText("Combined source CR")).not.toBeInTheDocument();
+    expect(screen.getByText("Nokia CR")).toBeInTheDocument();
   });
 
   it("renders nodes, edges and selection", () => {
@@ -294,10 +534,10 @@ describe("LineageView", () => {
         lineage={withDraft}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "",
-          source: "",
+          agenda: [],
+          type: [],
+          state: [],
+          source: [],
           tracked: false,
           includeEphemeral: true,
           hideWithdrawn: false,
@@ -338,10 +578,10 @@ describe("LineageView", () => {
         lineage={withDraft}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "",
-          source: "",
+          agenda: [],
+          type: [],
+          state: [],
+          source: [],
           tracked: false,
           includeEphemeral: false,
           hideWithdrawn: false,
@@ -431,6 +671,14 @@ describe("LineageView", () => {
         target: "S3-264203",
       }),
     );
+    const beforeDrafts = chained.edges.find(
+      (edge) => edge.source === "S3-264202" && edge.target === "draft:1",
+    );
+    const afterDrafts = chained.edges.find(
+      (edge) => edge.source === "draft:2" && edge.target === "S3-264203",
+    );
+    expect(beforeDrafts?.emails ?? []).toHaveLength(0);
+    expect(afterDrafts?.emails).toHaveLength(2);
 
     const layout = layoutLineage(chained);
     const depth = new Map(
@@ -439,6 +687,66 @@ describe("LineageView", () => {
     expect(depth.get("draft:1")).toBeGreaterThan(depth.get("S3-264202") ?? 0);
     expect(depth.get("draft:2")).toBeGreaterThan(depth.get("draft:1") ?? 0);
     expect(depth.get("S3-264203")).toBeGreaterThan(depth.get("draft:2") ?? 0);
+  });
+
+  it("spreads edge mails across draft segments by timestamp", () => {
+    const source = {
+      ...lineage.nodes[0],
+      first_seen_at: "2026-10-16T10:00:00.000000Z",
+    };
+    const target = {
+      ...lineage.nodes[1],
+      first_seen_at: "2026-10-16T10:10:00.000000Z",
+    };
+    const draftOne = {
+      ...source,
+      tdoc_number: "draft:1",
+      title: "draft 1",
+      node_kind: "draft" as const,
+      attached_to: target.tdoc_number,
+      artifact_id: 1,
+      remote_mtime: "2026-10-16T10:02:00.000000Z",
+    };
+    const draftTwo = {
+      ...source,
+      tdoc_number: "draft:2",
+      title: "draft 2",
+      node_kind: "draft" as const,
+      attached_to: target.tdoc_number,
+      artifact_id: 2,
+      remote_mtime: "2026-10-16T10:07:00.000000Z",
+    };
+    const mails = [
+      {
+        ...lineage.edges[0].emails![0],
+        id: 11,
+        subject: "Before draft 1",
+        date_utc: "2026-10-16T10:01:00.000000Z",
+      },
+      {
+        ...lineage.edges[0].emails![0],
+        id: 12,
+        subject: "Between drafts",
+        date_utc: "2026-10-16T10:04:00.000000Z",
+      },
+      {
+        ...lineage.edges[0].emails![0],
+        id: 13,
+        subject: "Before revised",
+        date_utc: "2026-10-16T10:09:00.000000Z",
+      },
+    ];
+    const chained = chainDrafts({
+      nodes: [source, draftOne, draftTwo, target],
+      edges: [{ ...lineage.edges[0], emails: mails }],
+    });
+    const mailsFor = (from: string, to: string) =>
+      chained.edges
+        .find((edge) => edge.source === from && edge.target === to)
+        ?.emails?.map((mail) => mail.subject) ?? [];
+    expect(mailsFor("S3-264202", "draft:1")).toEqual(["Before draft 1"]);
+    expect(mailsFor("draft:1", "draft:2")).toEqual(["Between drafts"]);
+    expect(mailsFor("draft:2", "S3-264203")).toEqual(["Before revised"]);
   });
 
   it("renders status and note badges with status taking visual precedence", () => {
@@ -539,10 +847,10 @@ describe("LineageView", () => {
         lineage={withDraft}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "",
-          source: "",
+          agenda: [],
+          type: [],
+          state: [],
+          source: [],
           tracked: false,
           includeEphemeral: true,
           hideWithdrawn: false,
@@ -812,11 +1120,11 @@ describe("LineageView", () => {
     ].map((node) => ({ ...node, is_tracked: false, is_hidden: false }));
 
     function Harness() {
-      const [filters, setFilters] = useState({
-        agenda: "",
-        type: "",
-        state: "",
-        source: "",
+      const [filters, setFilters] = useState<Filters>({
+        agenda: [],
+        type: [],
+        state: [],
+        source: [],
         tracked: false,
         includeEphemeral: true,
         hideWithdrawn: false,
@@ -873,10 +1181,10 @@ describe("LineageView", () => {
       },
     ];
     const filters = {
-      agenda: "",
-      type: "",
-      state: "",
-      source: "",
+      agenda: [],
+      type: [],
+      state: [],
+      source: [],
       tracked: false,
       includeEphemeral: true,
       hideWithdrawn: false,
@@ -977,10 +1285,10 @@ describe("LineageView", () => {
         }}
         selected={null}
         filters={{
-          agenda: "",
-          type: "",
-          state: "",
-          source: "",
+          agenda: [],
+          type: [],
+          state: [],
+          source: [],
           tracked: false,
           includeEphemeral: true,
           hideWithdrawn: false,

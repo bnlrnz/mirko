@@ -3,6 +3,7 @@ import type {
   Conflict,
   DraftDetail,
   Lineage,
+  MailSummary,
   Meeting,
   NotificationItem,
   Settings,
@@ -77,6 +78,37 @@ export const tdocs: TdocSummary[] = [
   },
 ];
 
+const lineageEdgeMails: MailSummary[] = [
+  {
+    id: 1,
+    message_id: "t1@example.org",
+    thread_id: 1,
+    subject: "[SA3#130][S3-264202] CR on QUIC",
+    from_addr: "Alice <alice@example.org>",
+    to_addrs: null,
+    cc_addrs: null,
+    date_utc: "2026-10-16T12:00:00.000000Z",
+    agenda_item: null,
+    meeting_id: "SA3#130",
+    ingested_at: "2026-10-16T12:00:00.000000Z",
+    inference: null,
+  },
+  {
+    id: 2,
+    message_id: "t2@example.org",
+    thread_id: 2,
+    subject: "[SA3#130][S3-264202] Revised draft available",
+    from_addr: "Bob <bob@example.org>",
+    to_addrs: null,
+    cc_addrs: null,
+    date_utc: "2026-10-16T12:30:00.000000Z",
+    agenda_item: null,
+    meeting_id: "SA3#130",
+    ingested_at: "2026-10-16T12:30:00.000000Z",
+    inference: null,
+  },
+];
+
 export const lineage: Lineage = {
   nodes: [
     {
@@ -116,6 +148,7 @@ export const lineage: Lineage = {
       confidence: 1,
       verified: true,
       source_ref: "agenda",
+      emails: lineageEdgeMails,
     },
   ],
 };

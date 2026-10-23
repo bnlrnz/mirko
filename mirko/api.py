@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from mirko import __version__
 from mirko import repository
+from mirko.blob_store import BlobError, BlobStore
 from mirko.config import ConfigError
 from mirko.export import export_markdown, finalize, render_markdown
 from mirko.ftp import FtpClient, LftpFtpClient
@@ -120,6 +121,10 @@ class MailSummary(BaseModel):
     inference: Any = None
 
 
+class MailDetail(MailSummary):
+    body: str = ""
+
+
 class AssertionSummary(BaseModel):
     id: int
     predicate: str
@@ -173,6 +178,7 @@ class LineageNode(BaseModel):
     decision: str | None = None
     state_source: str | None = None
     agenda_item: str | None = None
+    topic: str | None = None
     type: str | None = None
     source: str | None = None
     is_tracked: bool = False
@@ -198,6 +204,7 @@ class LineageEdge(BaseModel):
     source_ref: str | None = None
     active: bool = True
     muted: bool = False
+    emails: list[MailSummary] = Field(default_factory=list)
 
 
 class LineageResponse(BaseModel):
@@ -236,6 +243,15 @@ class NotificationItem(BaseModel):
     created_at: str | None = None
     action: Literal["track"] | None = None
     action_ref: str | None = None
+    seen: bool = False
+
+
+class NotificationSeenRequest(BaseModel):
+    refs: list[str] = Field(default_factory=list, max_length=500)
+
+
+class NotificationSeenResponse(BaseModel):
+    marked: int
 
 
 class TrackResponse(BaseModel):
@@ -404,10 +420,10 @@ class SettingsUpdate(BaseModel):
 
 
 class LineageFiltersModel(BaseModel):
-    agenda: str = ""
-    type: str = ""
-    state: str = ""
-    source: str = ""
+    agenda: list[str] = Field(default_factory=list)
+    type: list[str] = Field(default_factory=list)
+    state: list[str] = Field(default_factory=list)
+    source: list[str] = Field(default_factory=list)
     tracked: bool = False
     include_ephemeral: bool = True
     hide_withdrawn: bool = False
@@ -466,6 +482,17 @@ def _as_folder(meeting: MeetingFolder | str | Path) -> MeetingFolder:
     if isinstance(meeting, MeetingFolder):
         return meeting
     return MeetingFolder.open(meeting)
+
+
+def _mail_body(folder: MeetingFolder, digest: str | None) -> str:
+    if not digest:
+        return ""
+    try:
+        return BlobStore(folder.blobs_dir).path_for(digest).read_text(
+            encoding="utf-8"
+        )
+    except (BlobError, OSError, UnicodeDecodeError):
+        return ""
 
 
 def create_app(
@@ -601,10 +628,10 @@ def create_app(
                     id=view.id,
                     label=view.label,
                     filters=LineageFiltersModel(
-                        agenda=view.filters.agenda,
-                        type=view.filters.type,
-                        state=view.filters.state,
-                        source=view.filters.source,
+                        agenda=list(view.filters.agenda),
+                        type=list(view.filters.type),
+                        state=list(view.filters.state),
+                        source=list(view.filters.source),
                         tracked=view.filters.tracked,
                         include_ephemeral=view.filters.include_ephemeral,
                         hide_withdrawn=view.filters.hide_withdrawn,
@@ -839,6 +866,16 @@ def create_app(
             )
         )
 
+    @app.get("/api/mail/{email_id}", response_model=MailDetail)
+    def get_mail_detail(email_id: int) -> MailDetail:
+        row = with_connection(
+            lambda connection: repository.get_mail(connection, email_id)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="mail not found")
+        body = _mail_body(folder, row.pop("body_blob_hash", None))
+        return MailDetail(body=body, **row)
+
     @app.get("/api/log", response_model=list[UserActionItem])
     def get_log(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
         return with_connection(
@@ -856,6 +893,20 @@ def create_app(
                 connection, limit=limit
             )
         )
+
+    @app.post(
+        "/api/notifications/seen",
+        response_model=NotificationSeenResponse,
+    )
+    def post_notifications_seen(
+        payload: NotificationSeenRequest,
+    ) -> NotificationSeenResponse:
+        marked = with_connection(
+            lambda connection: repository.mark_notifications_seen(
+                connection, payload.refs
+            )
+        )
+        return NotificationSeenResponse(marked=marked)
 
     @app.get("/api/sync/status", response_model=SyncStatusResponse)
     def get_sync_status() -> dict:

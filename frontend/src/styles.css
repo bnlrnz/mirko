@@ -190,13 +190,34 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .lineage-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .lineage-legend { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-left: 8px; }
 .lineage-filters {
-  display: flex; align-items: end; gap: 7px; flex-wrap: wrap;
+  display: flex; align-items: flex-start; gap: 7px; flex-wrap: wrap;
   margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--panel-alt); font-size: 11px; color: var(--muted);
 }
 .lineage-filters label { display: flex; flex-direction: column; gap: 2px; }
 .lineage-filters label.check { flex-direction: row; align-items: center; gap: 4px; color: var(--text); }
-.lineage-filters select { border: 1px solid var(--border); border-radius: 4px; background: var(--panel); padding: 2px 4px; max-width: 130px; }
+.lineage-filter-group {
+  margin: 0; padding: 2px 6px 4px; border: 1px solid var(--border);
+  border-radius: 5px; min-width: 82px; max-width: 260px;
+}
+.lineage-filter-group legend { padding: 0 3px; color: var(--muted); }
+.lineage-filter-options {
+  display: flex; flex-direction: column; gap: 1px; max-height: 92px;
+  overflow: auto; padding-right: 2px;
+}
+.lineage-filter-options label {
+  flex-direction: row; align-items: center; gap: 4px;
+  color: var(--text); white-space: nowrap;
+}
+.lineage-filter-options input { margin: 0; }
+.lineage-filter-none { color: var(--muted); }
+.lineage-display-group { min-width: 0; max-width: 300px; }
+.lineage-display-options {
+  display: grid; grid-template-columns: repeat(2, max-content);
+  align-items: center; gap: 1px 14px; padding: 1px 0 2px;
+}
+.lineage-display-options label.check { white-space: nowrap; }
+.lineage-display-options .lineage-clear { justify-self: start; }
 .lineage-filters button { border: 1px solid var(--border); background: var(--panel); border-radius: 4px; padding: 2px 8px; }
 .lineage-filters button:disabled { opacity: 0.45; cursor: default; }
 .lineage-empty-filter {
@@ -223,6 +244,39 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .edge.based_on { stroke-dasharray: 4 4; }
 .edge.has_draft { stroke: #9aa6b6; stroke-dasharray: 2 4; opacity: 0.7; }
 .edge.unverified { stroke-dasharray: 2 5; opacity: 0.7; }
+.edge-mail { color: #3558a6; cursor: pointer; }
+.edge-mail .edge-mail-bg { fill: var(--panel); stroke: #9aa6b6; stroke-width: 1.2; }
+.edge-mail:hover .edge-mail-bg,
+.edge-mail:focus .edge-mail-bg,
+.edge-mail:focus-visible .edge-mail-bg { fill: var(--accent-soft); stroke: var(--accent); }
+.edge-mail.bulk { color: #a35b20; }
+.edge-mail.bulk .edge-mail-bg { stroke: #c98b52; }
+.edge-mail.bulk:hover .edge-mail-bg,
+.edge-mail.bulk:focus .edge-mail-bg,
+.edge-mail.bulk:focus-visible .edge-mail-bg { fill: #fff3e6; stroke: #a35b20; }
+.edge-mail .edge-mail-count circle { fill: var(--accent); }
+.edge-mail .edge-mail-count text { fill: #fff; font-size: 9px; font-weight: 700; }
+.edge-mail text { pointer-events: none; }
+.mail-preview {
+  position: fixed; z-index: 25; width: min(280px, calc(100vw - 24px));
+  transform: translate(-50%, -100%); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  padding: 8px 10px; font-size: 12px; pointer-events: none;
+}
+.mail-preview-count {
+  color: var(--muted); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.mail-preview-item { display: flex; flex-direction: column; gap: 1px; padding: 4px 0; }
+.mail-preview-item + .mail-preview-item { border-top: 1px solid var(--border); }
+.mail-preview-item strong {
+  color: var(--text); font-weight: 600; line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.mail-preview-item span { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.mail-preview-more { color: var(--muted); font-size: 11px; padding-top: 3px; }
 .node rect { fill: var(--panel); stroke: var(--border); stroke-width: 1.5; }
 .node text { pointer-events: none; fill: var(--text); }
 .node .node-id { font-family: ui-monospace, monospace; font-weight: 700; font-size: 12px; }
@@ -322,6 +376,44 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .artifact-list a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 .artifact-list a:hover { text-decoration: underline; }
 .artifact-list small, .mail-list small, .note-list small, .assertion-list small { color: var(--muted); font-size: 11px; width: 100%; }
+.mail-open {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; padding: 0; border: 0; background: none;
+  color: inherit; text-align: left; cursor: pointer;
+}
+.mail-open:hover strong { color: var(--accent); }
+.mail-backdrop {
+  position: fixed; inset: 0; z-index: 30; background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 6vh 16px; overflow: auto;
+}
+.mail-dialog {
+  display: flex; flex-direction: column; width: min(760px, 100%);
+  max-height: 88vh; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+}
+.mail-dialog-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--border);
+}
+.mail-dialog-header h2 {
+  margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0;
+  color: var(--text);
+}
+.mail-dialog-header p {
+  margin: 4px 0 0; color: var(--muted); font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.mail-dialog-header button {
+  border: 1px solid var(--border); background: var(--panel);
+  border-radius: 6px; padding: 5px 10px; white-space: nowrap;
+}
+.mail-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 18px; }
+.mail-dialog .error-text { color: var(--danger); font-size: 12px; margin: 0; }
+.mail-body {
+  margin: 0; font-family: inherit; font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 .assertion-list code { font-size: 11px; color: var(--accent); }
 .assertion-list li.muted { opacity: 0.55; }
 .note-form { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }

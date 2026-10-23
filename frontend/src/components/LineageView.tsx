@@ -1,11 +1,23 @@
+import {
+  faEnvelope,
+  faEnvelopesBulk,
+} from "@fortawesome/free-solid-svg-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Filters, Lineage, LineageEdge, LineageNode } from "../types";
+import { agendaFilterOptions } from "../agendaFilter";
+import type {
+  Filters,
+  Lineage,
+  LineageEdge,
+  LineageNode,
+  MailSummary,
+} from "../types";
 import { EMPTY_FILTERS } from "../lineageTabs";
 import {
   sourceMatches,
   uniqueSourceCompanies,
 } from "../sourceFilter";
+import { MailDialog } from "./MailViewer";
 import {
   LANE_HEIGHT,
   LineageNodeGlyph,
@@ -18,7 +30,6 @@ interface Props {
   selectedDraft?: number | null;
   filters?: Filters;
   onFilters?: (filters: Filters) => void;
-  nodeOrder?: readonly string[];
   onSelect: (tdoc: string, artifactId?: number) => void;
   onSelectDraft?: (artifactId: number) => void;
   focusRequest?: { tdoc: string; nonce: number } | null;
@@ -70,10 +81,61 @@ function draftLink(source: string, target: string): LineageEdge {
     source_ref: null,
     active: true,
     muted: false,
+    emails: [],
   };
 }
 
+function nodeMoment(node: LineageNode | undefined): string {
+  if (!node) {
+    return "";
+  }
+  return node.node_kind === "draft"
+    ? (node.remote_mtime ?? node.first_seen_at ?? "")
+    : (node.first_seen_at ?? node.remote_mtime ?? "");
+}
+
+function mailMoment(mail: MailSummary): string {
+  return mail.date_utc ?? mail.ingested_at;
+}
+
+function distributeMails(
+  mails: MailSummary[],
+  moments: string[],
+): MailSummary[][] {
+  const buckets = moments.slice(1).map(() => [] as MailSummary[]);
+  if (mails.length === 0 || buckets.length === 0) {
+    return buckets;
+  }
+  for (const mail of mails) {
+    const moment = mailMoment(mail);
+    let bucket = -1;
+    for (let index = 1; index < moments.length; index += 1) {
+      const start = moments[index - 1];
+      const end = moments[index];
+      if (!end) {
+        continue;
+      }
+      if ((!start || moment >= start) && moment <= end) {
+        bucket = index - 1;
+        break;
+      }
+    }
+    if (bucket < 0) {
+      bucket = buckets.length - 1;
+      for (let index = 1; index < moments.length; index += 1) {
+        if (moments[index] && moment <= moments[index]) {
+          bucket = index - 1;
+          break;
+        }
+      }
+    }
+    buckets[bucket].push(mail);
+  }
+  return buckets;
+}
+
 export function chainDrafts(lineage: Lineage): Lineage {
+  const byId = new Map(lineage.nodes.map((node) => [node.tdoc_number, node]));
   const draftsByTdoc = new Map<string, LineageNode[]>();
   const draftIds = new Set<string>();
   for (const node of lineage.nodes) {
@@ -90,24 +152,27 @@ export function chainDrafts(lineage: Lineage): Lineage {
     return lineage;
   }
 
-  const edges = lineage.edges.filter(
-    (edge) => !draftIds.has(edge.source) && !draftIds.has(edge.target),
-  );
+  const edges: LineageEdge[] = lineage.edges
+    .filter(
+      (edge) => !draftIds.has(edge.source) && !draftIds.has(edge.target),
+    )
+    .map((edge) => ({ ...edge, emails: [...(edge.emails ?? [])] }));
 
   for (const [tdoc, group] of draftsByTdoc) {
+    const tdocNode = byId.get(tdoc);
     const drafts = [...group].sort(compareDrafts);
     const incoming = edges.filter((edge) => edge.target === tdoc);
     const outgoing = edges.filter((edge) => edge.source === tdoc);
+    const hasIncoming = incoming.length > 0;
 
-    if (incoming.length > 0) {
+    if (hasIncoming) {
       for (const edge of incoming) {
         const index = edges.indexOf(edge);
         if (index >= 0) {
           edges.splice(index, 1);
         }
       }
-    }
-    if (incoming.length === 0 && outgoing.length > 0) {
+    } else if (outgoing.length > 0) {
       for (const edge of outgoing) {
         const index = edges.indexOf(edge);
         if (index >= 0) {
@@ -118,35 +183,96 @@ export function chainDrafts(lineage: Lineage): Lineage {
 
     const first = drafts[0];
     const last = drafts[drafts.length - 1];
-    if (incoming.length > 0) {
+    const firstSegments: LineageEdge[] = [];
+    if (hasIncoming) {
       for (const edge of incoming) {
-        edges.push({ ...edge, target: first.tdoc_number });
+        const segment = {
+          ...edge,
+          target: first.tdoc_number,
+          emails: [],
+        };
+        firstSegments.push(segment);
+        edges.push(segment);
       }
     } else {
-      edges.push(draftLink(tdoc, first.tdoc_number));
+      const segment = draftLink(tdoc, first.tdoc_number);
+      firstSegments.push(segment);
+      edges.push(segment);
     }
+
+    const draftSegments: LineageEdge[] = [];
     for (let index = 1; index < drafts.length; index += 1) {
-      edges.push(
-        draftLink(drafts[index - 1].tdoc_number, drafts[index].tdoc_number),
+      const segment = draftLink(
+        drafts[index - 1].tdoc_number,
+        drafts[index].tdoc_number,
       );
+      draftSegments.push(segment);
+      edges.push(segment);
     }
-    if (incoming.length > 0) {
-      const edge = incoming[0];
-      edges.push({ ...edge, source: last.tdoc_number, target: tdoc });
+
+    const draftMoments = drafts.map((draft) => nodeMoment(draft));
+    if (hasIncoming) {
+      const lastSegment = {
+        ...incoming[0],
+        source: last.tdoc_number,
+        target: tdoc,
+        emails: [],
+      };
+      edges.push(lastSegment);
+      for (let index = 0; index < incoming.length; index += 1) {
+        const edge = incoming[index];
+        const buckets = distributeMails(edge.emails ?? [], [
+          nodeMoment(byId.get(edge.source)),
+          ...draftMoments,
+          nodeMoment(tdocNode),
+        ]);
+        for (let bucket = 0; bucket < buckets.length; bucket += 1) {
+          const target =
+            bucket === 0
+              ? firstSegments[index]
+              : bucket === buckets.length - 1
+                ? lastSegment
+                : draftSegments[bucket - 1];
+          target.emails?.push(...buckets[bucket]);
+        }
+      }
     } else if (outgoing.length > 0) {
       for (const edge of outgoing) {
-        edges.push({ ...edge, source: last.tdoc_number });
+        const lastSegment = {
+          ...edge,
+          source: last.tdoc_number,
+          emails: [],
+        };
+        edges.push(lastSegment);
+        const buckets = distributeMails(edge.emails ?? [], [
+          nodeMoment(tdocNode),
+          ...draftMoments,
+          nodeMoment(byId.get(edge.target)),
+        ]);
+        for (let bucket = 0; bucket < buckets.length; bucket += 1) {
+          const target =
+            bucket === 0
+              ? firstSegments[0]
+              : bucket === buckets.length - 1
+                ? lastSegment
+                : draftSegments[bucket - 1];
+          target.emails?.push(...buckets[bucket]);
+        }
       }
     }
+  }
+
+  for (const edge of edges) {
+    edge.emails?.sort((left, right) => {
+      const time = mailMoment(left).localeCompare(mailMoment(right));
+      return time !== 0 ? time : left.id - right.id;
+    });
   }
 
   return { nodes: lineage.nodes, edges };
 }
 
-export function layoutLineage(
-  lineage: Lineage,
-  nodeOrder: readonly string[] = [],
-): {
+export function layoutLineage(lineage: Lineage): {
   nodes: PositionedNode[];
   width: number;
   height: number;
@@ -184,17 +310,11 @@ export function layoutLineage(
     }
   }
 
-  const order = new Map(nodeOrder.map((id, index) => [id, index]));
   const ordered = [...lineage.nodes].sort((a, b) => {
-    const depthDelta = (depth.get(a.tdoc_number) ?? 0) - (depth.get(b.tdoc_number) ?? 0);
+    const depthDelta =
+      (depth.get(a.tdoc_number) ?? 0) - (depth.get(b.tdoc_number) ?? 0);
     if (depthDelta !== 0) {
       return depthDelta;
-    }
-    const orderDelta =
-      (order.get(a.tdoc_number) ?? Number.MAX_SAFE_INTEGER) -
-      (order.get(b.tdoc_number) ?? Number.MAX_SAFE_INTEGER);
-    if (orderDelta !== 0) {
-      return orderDelta;
     }
     const agenda = (a.agenda_item ?? "").localeCompare(b.agenda_item ?? "");
     return agenda !== 0 ? agenda : a.tdoc_number.localeCompare(b.tdoc_number);
@@ -251,6 +371,147 @@ function edgePath(edge: LineageEdge, positions: Map<string, PositionedNode>) {
   return `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`;
 }
 
+function edgeMailKey(edge: LineageEdge): string {
+  return `${edge.source}->${edge.target}:${edge.kind}`;
+}
+
+function edgeMidpoint(
+  edge: LineageEdge,
+  positions: Map<string, PositionedNode>,
+): { x: number; y: number } | null {
+  const source = positions.get(edge.source);
+  const target = positions.get(edge.target);
+  if (!source || !target) {
+    return null;
+  }
+  return {
+    x: (source.x + NODE_WIDTH + target.x) / 2,
+    y:
+      (source.y + target.y) / 2 +
+      LANE_HEIGHT / 2 -
+      8,
+  };
+}
+
+function mailButtonLabel(mail: MailSummary): string {
+  return `Mail: ${mail.subject ?? "(no subject)"} from ${
+    mail.from_addr ?? "unknown sender"
+  }`;
+}
+
+function MailIconPaths({ bulk }: { bulk: boolean }) {
+  const icon = bulk ? faEnvelopesBulk : faEnvelope;
+  const [viewWidth, viewHeight, , , path] = icon.icon;
+  const paths = Array.isArray(path) ? path : [path];
+  return (
+    <svg
+      x={-9}
+      y={-9}
+      width={18}
+      height={18}
+      viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+      preserveAspectRatio="xMidYMid meet"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {paths.map((data, index) => (
+        <path key={index} d={data} fill="currentColor" />
+      ))}
+    </svg>
+  );
+}
+
+function EdgeMailGlyph({
+  mails,
+  x,
+  y,
+  bulk,
+  label,
+  onActivate,
+  onPreview,
+  onPreviewEnd,
+}: {
+  mails: MailSummary[];
+  x: number;
+  y: number;
+  bulk: boolean;
+  label: string;
+  onActivate: () => void;
+  onPreview: (element: Element, mails: MailSummary[]) => void;
+  onPreviewEnd: () => void;
+}) {
+  return (
+    <g
+      className={`edge-mail${bulk ? " bulk" : ""}`}
+      role="button"
+      tabIndex={0}
+      aria-label={label}
+      transform={`translate(${x}, ${y})`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onActivate();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.stopPropagation();
+          onActivate();
+        }
+      }}
+      onMouseEnter={(event) => onPreview(event.currentTarget, mails)}
+      onMouseLeave={onPreviewEnd}
+      onFocus={(event) => onPreview(event.currentTarget, mails)}
+      onBlur={onPreviewEnd}
+    >
+      <circle className="edge-mail-bg" r={12} />
+      <MailIconPaths bulk={bulk} />
+      {bulk ? (
+        <g className="edge-mail-count" transform="translate(11, -11)">
+          <circle r={7} />
+          <text x={0} y={3} textAnchor="middle">
+            {mails.length}
+          </text>
+        </g>
+      ) : null}
+    </g>
+  );
+}
+
+function MailPreviewCard({
+  mails,
+  x,
+  y,
+}: {
+  mails: MailSummary[];
+  x: number;
+  y: number;
+}) {
+  const left = Math.max(170, Math.min(x, window.innerWidth - 170));
+  return (
+    <div
+      className="mail-preview"
+      role="tooltip"
+      style={{ left, top: Math.max(150, y - 10) }}
+    >
+      {mails.length > 1 ? (
+        <div className="mail-preview-count">{mails.length} mails</div>
+      ) : null}
+      {mails.slice(0, 4).map((mail) => (
+        <div className="mail-preview-item" key={mail.id}>
+          <strong>{mail.subject ?? "(no subject)"}</strong>
+          <span>{mail.from_addr ?? "unknown sender"}</span>
+        </div>
+      ))}
+      {mails.length > 4 ? (
+        <div className="mail-preview-more">
+          +{mails.length - 4} more
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const LEGEND = [
   ["state-approved", "approved / agreed / replied to"],
   ["state-merged", "merged / revised"],
@@ -263,17 +524,80 @@ function uniqueOptions(values: (string | null | undefined)[]): string[] {
   return [...new Set(values.filter((value): value is string => !!value))].sort();
 }
 
+interface FilterChoice {
+  value: string;
+  label: string;
+}
+
+function choiceOptions(
+  values: (string | null | undefined)[],
+): FilterChoice[] {
+  return uniqueOptions(values).map((value) => ({ value, label: value }));
+}
+
+function CheckboxFilter({
+  label,
+  options,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  options: FilterChoice[];
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <fieldset
+      className="lineage-filter-group"
+      aria-label={`${label} filter`}
+    >
+      <legend>{label}</legend>
+      <div className="lineage-filter-options">
+        {options.length === 0 ? (
+          <span className="lineage-filter-none">None</span>
+        ) : (
+          options.map((option) => (
+            <label key={option.value}>
+              <input
+                type="checkbox"
+                value={option.value}
+                checked={selected.includes(option.value)}
+                onChange={() => onToggle(option.value)}
+              />
+              <span title={option.label}>{option.label}</span>
+            </label>
+          ))
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
 function filterMatches(node: LineageNode, filters: Filters): boolean {
-  if (filters.agenda && node.agenda_item !== filters.agenda) {
+  if (
+    filters.agenda.length > 0 &&
+    (!node.agenda_item || !filters.agenda.includes(node.agenda_item))
+  ) {
     return false;
   }
-  if (filters.type && node.type !== filters.type) {
+  if (
+    filters.type.length > 0 &&
+    (!node.type || !filters.type.includes(node.type))
+  ) {
     return false;
   }
-  if (filters.state && node.decision !== filters.state) {
+  if (
+    filters.state.length > 0 &&
+    (!node.decision || !filters.state.includes(node.decision))
+  ) {
     return false;
   }
-  if (filters.source && !sourceMatches(filters.source, node.source)) {
+  if (
+    filters.source.length > 0 &&
+    !filters.source.some((company) =>
+      sourceMatches(company, node.source),
+    )
+  ) {
     return false;
   }
   return true;
@@ -349,7 +673,12 @@ function hiddenByControls(
 
 function filterLineage(lineage: Lineage, filters: Filters): Lineage {
   const active =
-    Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
+    Boolean(
+      filters.agenda.length ||
+        filters.type.length ||
+        filters.state.length ||
+        filters.source.length,
+    ) ||
     filters.tracked ||
     filters.hideWithdrawn ||
     filters.hideNotTreated ||
@@ -397,7 +726,6 @@ export function LineageView({
   selectedDraft = null,
   filters = EMPTY_FILTERS,
   onFilters,
-  nodeOrder = [],
   onSelect,
   onSelectDraft,
   focusRequest,
@@ -427,13 +755,24 @@ export function LineageView({
   const momentumActive = useRef(false);
   const focusedNonce = useRef<number | null>(null);
   const focusFrame = useRef<number | null>(null);
+  const [expandedMailEdge, setExpandedMailEdge] = useState<string | null>(
+    null,
+  );
+  const [openMail, setOpenMail] = useState<MailSummary | null>(null);
+  const [mailPreview, setMailPreview] = useState<{
+    mails: MailSummary[];
+    x: number;
+    y: number;
+  } | null>(null);
   const filterOptions = useMemo(() => {
     const tdocs = lineage.nodes.filter((node) => node.node_kind !== "draft");
     return {
-      agendas: uniqueOptions(tdocs.map((node) => node.agenda_item)),
-      types: uniqueOptions(tdocs.map((node) => node.type)),
-      states: uniqueOptions(tdocs.map((node) => node.decision)),
-      sources: uniqueSourceCompanies(tdocs.map((node) => node.source)),
+      agendas: agendaFilterOptions(tdocs),
+      types: choiceOptions(tdocs.map((node) => node.type)),
+      states: choiceOptions(tdocs.map((node) => node.decision)),
+      sources: uniqueSourceCompanies(tdocs.map((node) => node.source)).map(
+        (company) => ({ value: company, label: company }),
+      ),
     };
   }, [lineage.nodes]);
   const filteredLineage = useMemo(
@@ -455,8 +794,8 @@ export function LineageView({
     [filteredLineage, includeDrafts],
   );
   const layout = useMemo(
-    () => layoutLineage(visibleLineage, nodeOrder),
-    [nodeOrder, visibleLineage],
+    () => layoutLineage(visibleLineage),
+    [visibleLineage],
   );
   const positions = useMemo(
     () => new Map(layout.nodes.map((node) => [node.tdoc_number, node])),
@@ -537,11 +876,68 @@ export function LineageView({
     }
   };
 
-  const setFilter = (key: keyof Filters, value: string | boolean) => {
+  const openMailView = (mail: MailSummary) => {
+    setExpandedMailEdge(null);
+    setMailPreview(null);
+    setOpenMail(mail);
+  };
+  const previewMails = (element: Element, mails: MailSummary[]) => {
+    const rect = element.getBoundingClientRect();
+    setMailPreview({
+      mails,
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+    });
+  };
+  const clearMailPreview = () => setMailPreview(null);
+
+  useEffect(() => {
+    if (expandedMailEdge === null) {
+      return;
+    }
+    const collapse = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest?.(".edge-mail")) {
+        return;
+      }
+      setExpandedMailEdge(null);
+      setMailPreview(null);
+    };
+    document.addEventListener("pointerdown", collapse, true);
+    return () => document.removeEventListener("pointerdown", collapse, true);
+  }, [expandedMailEdge]);
+
+  const setFilter = (
+    key:
+      | "tracked"
+      | "includeEphemeral"
+      | "hideWithdrawn"
+      | "hideNotTreated"
+      | "hideUnknown"
+      | "showHidden",
+    value: boolean,
+  ) => {
     onFilters?.({ ...filters, [key]: value });
   };
+  const toggleFilter = (
+    key: "agenda" | "type" | "state" | "source",
+    value: string,
+  ) => {
+    const selected = filters[key];
+    onFilters?.({
+      ...filters,
+      [key]: selected.includes(value)
+        ? selected.filter((item) => item !== value)
+        : [...selected, value],
+    });
+  };
   const hasFilters =
-    Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
+    Boolean(
+      filters.agenda.length ||
+        filters.type.length ||
+        filters.state.length ||
+        filters.source.length,
+    ) ||
     filters.tracked ||
     !filters.includeEphemeral ||
     filters.hideWithdrawn ||
@@ -559,7 +955,11 @@ export function LineageView({
     }
     stopMomentum();
     const target = event.target as Element;
-    if (!target.closest?.(".lineage-canvas") || target.closest?.(".node")) {
+    if (
+      !target.closest?.(".lineage-canvas") ||
+      target.closest?.(".node") ||
+      target.closest?.(".edge-mail")
+    ) {
       return;
     }
     pan.current = {
@@ -695,125 +1095,119 @@ export function LineageView({
         </span>
       </div>
       <div className="lineage-filters" aria-label="Lineage filters">
-        <label>
-          Agenda
-          <select
-            aria-label="Agenda filter"
-            value={filters.agenda}
-            onChange={(event) => setFilter("agenda", event.target.value)}
-          >
-            <option value="">All</option>
-            {filterOptions.agendas.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Type
-          <select
-            aria-label="Type filter"
-            value={filters.type}
-            onChange={(event) => setFilter("type", event.target.value)}
-          >
-            <option value="">All</option>
-            {filterOptions.types.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          State
-          <select
-            aria-label="State filter"
-            value={filters.state}
-            onChange={(event) => setFilter("state", event.target.value)}
-          >
-            <option value="">All</option>
-            {filterOptions.states.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Source
-          <select
-            aria-label="Source filter"
-            value={filters.source}
-            onChange={(event) => setFilter("source", event.target.value)}
-          >
-            <option value="">All</option>
-            {filterOptions.sources.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={filters.tracked}
-            onChange={(event) => setFilter("tracked", event.target.checked)}
-          />
-          Tracked only
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            aria-label="Include Drafts"
-            checked={filters.includeEphemeral}
-            onChange={(event) =>
-              setFilter("includeEphemeral", event.target.checked)
-            }
-          />
-          Include Drafts
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            aria-label="Hide withdrawn"
-            checked={filters.hideWithdrawn}
-            onChange={(event) =>
-              setFilter("hideWithdrawn", event.target.checked)
-            }
-          />
-          Hide withdrawn
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            aria-label="Hide not treated"
-            checked={filters.hideNotTreated}
-            onChange={(event) =>
-              setFilter("hideNotTreated", event.target.checked)
-            }
-          />
-          Hide not treated
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            aria-label="Hide unknown"
-            checked={filters.hideUnknown}
-            onChange={(event) => setFilter("hideUnknown", event.target.checked)}
-          />
-          Hide unknown
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            aria-label="Show hidden"
-            checked={filters.showHidden}
-            onChange={(event) => setFilter("showHidden", event.target.checked)}
-          />
-          Show hidden
-        </label>
-        <button
-          type="button"
-          className="lineage-clear"
-          disabled={!hasFilters}
-          onClick={() => onFilters?.(EMPTY_FILTERS)}
+        <CheckboxFilter
+          label="Agenda"
+          options={filterOptions.agendas}
+          selected={filters.agenda}
+          onToggle={(value) => toggleFilter("agenda", value)}
+        />
+        <CheckboxFilter
+          label="Type"
+          options={filterOptions.types}
+          selected={filters.type}
+          onToggle={(value) => toggleFilter("type", value)}
+        />
+        <CheckboxFilter
+          label="State"
+          options={filterOptions.states}
+          selected={filters.state}
+          onToggle={(value) => toggleFilter("state", value)}
+        />
+        <CheckboxFilter
+          label="Source"
+          options={filterOptions.sources}
+          selected={filters.source}
+          onToggle={(value) => toggleFilter("source", value)}
+        />
+        <fieldset
+          className="lineage-filter-group lineage-display-group"
+          aria-label="Display options"
         >
-          Clear
-        </button>
+          <legend>Display</legend>
+          <div className="lineage-display-options">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={filters.tracked}
+                onChange={(event) =>
+                  setFilter("tracked", event.target.checked)
+                }
+              />
+              Tracked only
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                aria-label="Include Drafts"
+                checked={filters.includeEphemeral}
+                onChange={(event) =>
+                  setFilter("includeEphemeral", event.target.checked)
+                }
+              />
+              Include Drafts
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                aria-label="Hide withdrawn"
+                checked={filters.hideWithdrawn}
+                onChange={(event) =>
+                  setFilter("hideWithdrawn", event.target.checked)
+                }
+              />
+              Hide withdrawn
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                aria-label="Hide not treated"
+                checked={filters.hideNotTreated}
+                onChange={(event) =>
+                  setFilter("hideNotTreated", event.target.checked)
+                }
+              />
+              Hide not treated
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                aria-label="Hide unknown"
+                checked={filters.hideUnknown}
+                onChange={(event) =>
+                  setFilter("hideUnknown", event.target.checked)
+                }
+              />
+              Hide unknown
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                aria-label="Show hidden"
+                checked={filters.showHidden}
+                onChange={(event) =>
+                  setFilter("showHidden", event.target.checked)
+                }
+              />
+              Show hidden
+            </label>
+            <button
+              type="button"
+              className="lineage-clear"
+              disabled={!hasFilters}
+              onClick={() =>
+                onFilters?.({
+                  ...EMPTY_FILTERS,
+                  agenda: [],
+                  type: [],
+                  state: [],
+                  source: [],
+                })
+              }
+            >
+              Clear
+            </button>
+          </div>
+        </fieldset>
       </div>
       {layout.nodes.length === 0 ? (
         <div className="lineage-empty-filter">
@@ -854,6 +1248,61 @@ export function LineageView({
                 />
               ))}
             </g>
+            <g className="edge-mails">
+              {visibleEdges.map((edge) => {
+                const mails = edge.emails ?? [];
+                if (mails.length === 0) {
+                  return null;
+                }
+                const point = edgeMidpoint(edge, positions);
+                if (!point) {
+                  return null;
+                }
+                const key = edgeMailKey(edge);
+                if (expandedMailEdge === key && mails.length > 1) {
+                  return mails.map((mail, index) => (
+                    <EdgeMailGlyph
+                      key={`${key}:${mail.id}`}
+                      mails={[mail]}
+                      x={point.x}
+                      y={
+                        point.y +
+                        (index - (mails.length - 1) / 2) * 24
+                      }
+                      bulk={false}
+                      label={mailButtonLabel(mail)}
+                      onActivate={() => openMailView(mail)}
+                      onPreview={previewMails}
+                      onPreviewEnd={clearMailPreview}
+                    />
+                  ));
+                }
+                return (
+                  <EdgeMailGlyph
+                    key={key}
+                    mails={mails}
+                    x={point.x}
+                    y={point.y}
+                    bulk={mails.length > 1}
+                    label={
+                      mails.length > 1
+                        ? `Mail bundle: ${mails.length} mails`
+                        : mailButtonLabel(mails[0])
+                    }
+                    onActivate={() => {
+                      if (mails.length > 1) {
+                        setMailPreview(null);
+                        setExpandedMailEdge(key);
+                      } else {
+                        openMailView(mails[0]);
+                      }
+                    }}
+                    onPreview={previewMails}
+                    onPreviewEnd={clearMailPreview}
+                  />
+                );
+              })}
+            </g>
             <g className="nodes">
               {layout.nodes.map((node) => {
                 const newFile =
@@ -888,6 +1337,10 @@ export function LineageView({
         </div>
       </div>
       )}
+      {mailPreview ? <MailPreviewCard {...mailPreview} /> : null}
+      {openMail ? (
+        <MailDialog mail={openMail} onClose={() => setOpenMail(null)} />
+      ) : null}
     </div>
   );
 }

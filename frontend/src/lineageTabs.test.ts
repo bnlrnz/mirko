@@ -12,18 +12,29 @@ describe("lineage tabs", () => {
     const tab = createLineageTab();
     expect(tab.id).toBe("lineage-1");
     expect(tab.label).toBe("Lineage");
-    expect(tab.filters.agenda).toBe("");
+    expect(tab.filters.agenda).toEqual([]);
     expect(tab.filters.includeEphemeral).toBe(true);
   });
 
   it("gives every added view its own filter object", () => {
     const first = createLineageTab();
     const second = createLineageTab([first]);
-    second.filters.agenda = "5.3.1.3";
+    second.filters.agenda = ["5.3.1.3"];
 
     expect(second.id).toBe("lineage-2");
     expect(second.label).toBe("Lineage 2");
-    expect(first.filters.agenda).toBe("");
+    expect(first.filters.agenda).toEqual([]);
+  });
+
+  it("does not share filter arrays between views", () => {
+    const first = createLineageTab();
+    const second = createLineageTab([first]);
+
+    first.filters.agenda.push("5.3.1.3");
+    first.filters.source.push("Huawei");
+
+    expect(second.filters.agenda).toEqual([]);
+    expect(second.filters.source).toEqual([]);
   });
 
   it("avoids duplicate labels after a view is renamed", () => {
@@ -37,8 +48,10 @@ describe("lineage tabs", () => {
   it("round-trips lineage views through the meeting config shape", () => {
     const tab = createLineageTab();
     tab.label = "Agenda 5.3.1.3";
-    tab.filters.agenda = "5.3.1.3";
-    tab.filters.source = "Huawei";
+    tab.filters.agenda = ["5.3.1.3", "5.3.1.4"];
+    tab.filters.type = ["CR", "LS in"];
+    tab.filters.state = ["agreed", "revised"];
+    tab.filters.source = ["Huawei", "Nokia"];
     tab.filters.tracked = true;
     tab.filters.includeEphemeral = false;
     tab.filters.hideWithdrawn = true;
@@ -49,10 +62,10 @@ describe("lineage tabs", () => {
         id: "lineage-1",
         label: "Agenda 5.3.1.3",
         filters: {
-          agenda: "5.3.1.3",
-          type: "",
-          state: "",
-          source: "Huawei",
+          agenda: ["5.3.1.3", "5.3.1.4"],
+          type: ["CR", "LS in"],
+          state: ["agreed", "revised"],
+          source: ["Huawei", "Nokia"],
           tracked: true,
           include_ephemeral: false,
           hide_withdrawn: true,
@@ -63,6 +76,26 @@ describe("lineage tabs", () => {
       },
     ]);
     expect(lineageTabsFromConfig(config)).toEqual([tab]);
+  });
+
+  it("migrates legacy single-string filter values to lists", () => {
+    const [tab] = lineageTabsFromConfig([
+      {
+        id: "lineage-1",
+        label: "Legacy",
+        filters: {
+          agenda: "5.3.1.3",
+          type: "CR",
+          state: "agreed",
+          source: "Huawei",
+        },
+      },
+    ]);
+
+    expect(tab.filters.agenda).toEqual(["5.3.1.3"]);
+    expect(tab.filters.type).toEqual(["CR"]);
+    expect(tab.filters.state).toEqual(["agreed"]);
+    expect(tab.filters.source).toEqual(["Huawei"]);
   });
 
   it("falls back safely for stale or hand-edited view entries", () => {

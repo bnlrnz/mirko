@@ -387,10 +387,10 @@ def test_lineage_views_map_names_and_filters() -> None:
                 "id": "lineage-1",
                 "label": "Agenda 5.3.1.3",
                 "filters": {
-                    "agenda": "5.3.1.3",
-                    "type": "CR",
-                    "state": "agreed",
-                    "source": "Huawei",
+                    "agenda": ["5.3.1.3", "5.3.1.4"],
+                    "type": ["CR", "LS in"],
+                    "state": ["agreed"],
+                    "source": ["Huawei", "Nokia"],
                     "tracked": True,
                     "include_ephemeral": False,
                     "hide_withdrawn": True,
@@ -415,10 +415,10 @@ def test_lineage_views_map_names_and_filters() -> None:
             id="lineage-1",
             label="Agenda 5.3.1.3",
             filters=LineageFilters(
-                agenda="5.3.1.3",
-                type="CR",
-                state="agreed",
-                source="Huawei",
+                agenda=("5.3.1.3", "5.3.1.4"),
+                type=("CR", "LS in"),
+                state=("agreed",),
+                source=("Huawei", "Nokia"),
                 tracked=True,
                 include_ephemeral=False,
                 hide_withdrawn=True,
@@ -434,6 +434,33 @@ def test_lineage_views_map_names_and_filters() -> None:
         ),
     )
     assert config.ui.active_lineage_view == "tracked"
+
+
+def test_lineage_view_legacy_string_filters_are_migrated() -> None:
+    data = minimal_config()
+    data["ui"] = {
+        "lineage_views": [
+            {
+                "id": "lineage-1",
+                "label": "Legacy",
+                "filters": {
+                    "agenda": "5.3.1.3",
+                    "type": "CR",
+                    "state": "agreed",
+                    "source": "Huawei",
+                },
+            }
+        ]
+    }
+
+    config = validate_config(data)
+
+    assert config.ui.lineage_views[0].filters == LineageFilters(
+        agenda=("5.3.1.3",),
+        type=("CR",),
+        state=("agreed",),
+        source=("Huawei",),
+    )
 
 
 @pytest.mark.parametrize(
@@ -460,6 +487,20 @@ def test_lineage_views_map_names_and_filters() -> None:
         (
             [{"id": "view", "label": "View", "filters": {"tracked": "yes"}}],
             "ui.lineage_views[0].filters.tracked",
+        ),
+        (
+            [
+                {
+                    "id": "view",
+                    "label": "View",
+                    "filters": {"agenda": [1]},
+                }
+            ],
+            "ui.lineage_views[0].filters.agenda[0]",
+        ),
+        (
+            [{"id": "view", "label": "View", "filters": {"state": 3}}],
+            "ui.lineage_views[0].filters.state",
         ),
         (
             [{"id": "view", "label": "View", "filters": "all"}],

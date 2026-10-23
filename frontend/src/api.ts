@@ -7,6 +7,7 @@ import type {
   FetchResult,
   Lineage,
   LineageViews,
+  MailDetail,
   MailSummary,
   Meeting,
   NodeStatus,
@@ -72,6 +73,7 @@ export const api = {
     request<MailSummary[]>(
       `/api/mail${query(params as Record<string, string | undefined>)}`,
     ),
+  mailDetail: (id: number) => request<MailDetail>(`/api/mail/${id}`),
   lineageViews: () => request<LineageViews>("/api/lineage-views"),
   saveLineageViews: (body: LineageViews) =>
     request<LineageViews>("/api/lineage-views", {
@@ -80,6 +82,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   notifications: () => request<NotificationItem[]>("/api/notifications"),
+  markNotificationsSeen: (refs: string[]) =>
+    request<{ marked: number }>("/api/notifications/seen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refs }),
+    }),
   log: () => request<UserAction[]>("/api/log"),
   conflicts: () => request<Conflict[]>("/api/conflicts"),
   resolveConflict: (id: number, resolution: ConflictResolution, note?: string) =>

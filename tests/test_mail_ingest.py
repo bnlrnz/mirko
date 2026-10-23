@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import mailbox
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import format_datetime
 from pathlib import Path
 
-from mirko.ingest.mail_ingest import MailIngestor
+from mirko.ingest.mail_ingest import MBOX_STATE_KEY, MailIngestor
 from mirko.meeting_folder import MeetingFolder
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
@@ -160,6 +161,172 @@ def test_mbox_reingest_is_skipped_by_identity(tmp_path: Path) -> None:
     assert second.skipped == 1
     assert len(rows(folder, "SELECT * FROM email")) == 1
     assert len(rows(folder, "SELECT * FROM email_fts")) == 1
+
+
+def test_mbox_file_includes_thunderbird_subfolders(tmp_path: Path) -> None:
+    root = tmp_path / "mail" / "3GPP SA3"
+    root.parent.mkdir()
+    write_mbox(
+        root,
+        [
+            make_message(
+                message_id="parent@example.org",
+                subject="[SA3#130] Parent folder",
+                body="Parent body.",
+            )
+        ],
+    )
+    children = root.with_name(root.name + ".sbd")
+    children.mkdir()
+    write_mbox(
+        children / "SCAS",
+        [
+            make_message(
+                message_id="child@example.org",
+                subject="[SA3#130] SCAS folder",
+                body="SCAS body.",
+            )
+        ],
+    )
+    (children / "SCAS.msf").write_text("thunderbird index")
+
+    folder = MeetingFolder.create(
+        tmp_path / "SA3-130",
+        base_config({"kind": "mbox", "path": str(root)}),
+    )
+    ingestor = MailIngestor(folder, clock=lambda: NOW)
+
+    first = ingestor.ingest()
+    assert first.kind == "mbox"
+    assert first.examined == 2
+    assert first.new_messages == 2
+    assert {row["message_id"] for row in rows(folder, "SELECT * FROM email")} == {
+        "parent@example.org",
+        "child@example.org",
+    }
+
+    second = ingestor.ingest()
+    assert second.examined == 0
+    assert second.new_messages == 0
+    assert second.skipped == 2
+
+    write_mbox(
+        children / "SCAS",
+        [
+            make_message(
+                message_id="child@example.org",
+                subject="[SA3#130] SCAS folder",
+                body="SCAS body.",
+            ),
+            make_message(
+                message_id="child2@example.org",
+                subject="[SA3#130] SCAS update",
+                body="Another SCAS body.",
+            ),
+        ],
+    )
+    third = ingestor.ingest()
+    assert third.examined == 2
+    assert third.new_messages == 1
+    assert third.skipped == 1
+
+
+def test_legacy_mbox_state_skips_unchanged_parent(tmp_path: Path) -> None:
+    root = tmp_path / "mail" / "3GPP SA3"
+    root.parent.mkdir()
+    write_mbox(
+        root,
+        [
+            make_message(
+                message_id="parent@example.org",
+                subject="[SA3#130] Parent folder",
+                body="Parent body.",
+            )
+        ],
+    )
+    children = root.with_name(root.name + ".sbd")
+    children.mkdir()
+    write_mbox(
+        children / "SCAS",
+        [
+            make_message(
+                message_id="child@example.org",
+                subject="[SA3#130] SCAS folder",
+                body="SCAS body.",
+            )
+        ],
+    )
+    folder = MeetingFolder.create(
+        tmp_path / "SA3-130",
+        base_config({"kind": "mbox", "path": str(root)}),
+    )
+    stat = root.stat()
+    connection = folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO meeting_meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (
+                MBOX_STATE_KEY,
+                json.dumps(
+                    {"size": stat.st_size, "mtime": stat.st_mtime}
+                ),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = MailIngestor(folder, clock=lambda: NOW).ingest()
+
+    assert result.examined == 1
+    assert result.new_messages == 1
+    assert rows(folder, "SELECT * FROM email")[0]["message_id"] == (
+        "child@example.org"
+    )
+
+
+def test_mbox_directory_is_scanned_recursively(tmp_path: Path) -> None:
+    root = tmp_path / "mail"
+    root.mkdir()
+    write_mbox(
+        root / "INBOX",
+        [
+            make_message(
+                message_id="root@example.org",
+                subject="[SA3#130] Root mail",
+                body="Root body.",
+            )
+        ],
+    )
+    nested = root / "lists" / "SA3"
+    nested.mkdir(parents=True)
+    write_mbox(
+        nested / "SCAS",
+        [
+            make_message(
+                message_id="nested@example.org",
+                subject="[SA3#130] Nested mail",
+                body="Nested body.",
+            )
+        ],
+    )
+    (nested / "SCAS.msf").write_text("thunderbird index")
+    (root / "notes.txt").write_text("not an mbox")
+
+    folder = MeetingFolder.create(
+        tmp_path / "SA3-130",
+        base_config({"kind": "mbox", "path": str(root)}),
+    )
+    result = MailIngestor(folder, clock=lambda: NOW).ingest()
+
+    assert result.kind == "mbox"
+    assert result.examined == 2
+    assert result.new_messages == 2
+    assert {row["message_id"] for row in rows(folder, "SELECT * FROM email")} == {
+        "root@example.org",
+        "nested@example.org",
+    }
 
 
 def test_message_id_dedup_when_mbox_changes(tmp_path: Path) -> None:

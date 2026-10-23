@@ -26,7 +26,8 @@ process re-implementation.
 - HTML ingestion of `AgendaWithTdocAllocation_*.htm` (authoritative state + lineage).
 - Excel ingestion of the pre-meeting allocation table (prep data, provenance-aware).
 - Filename heuristics for `Drafts/` (hints only, never authoritative).
-- Mail ingestion from a local `mbox`, `.eml` file, or `EML` directory (no IMAP/POP client).
+- Mail ingestion from a local `mbox` file or directory (including Thunderbird
+  `.sbd` subfolders), `.eml` file, or `EML` directory (no IMAP/POP client).
 - Lineage graph + per-TDoc timeline, filters, detail view.
 - User-managed node statuses and notes, manual lineage assertions, conflict repair.
 - Whole-meeting Markdown export.
@@ -57,7 +58,7 @@ Chrome, LibreOffice. `lftp` is **not installed** and is an explicit runtime depe
 | Persistence | SQLite (WAL) | Portable single file, transactional, already available, ideal for app state. |
 | Blob cache | Content-addressed files under the meeting folder | Dedup, renames, portability, auditability. |
 | FTP | `lftp` invoked as a subprocess | Required by the network/proxy/WAP environment; works for FTP and HTTPS mirrors. |
-| Mail | Local `mbox` / `.eml` file / `EML` directory via stdlib `mailbox` + `email` | Thunderbird or any client does fetching; removes IMAP/credential fragility. |
+| Mail | Local `mbox` file or tree / `.eml` file / `EML` directory via stdlib `mailbox` + `email` | Thunderbird or any client does fetching; removes IMAP/credential fragility. |
 | Packaging | Nix flake + dev shell (Python, Node, lftp) | Reproducible NixOS setup; preflight blocks startup if `lftp` is missing. |
 
 Process model: one FastAPI process, one serial background sync worker (thread or
@@ -171,10 +172,10 @@ everything; no absolute paths are stored.
         "id": "lineage-1",
         "label": "Agenda 5.3.1.3",
         "filters": {
-          "agenda": "5.3.1.3",
-          "type": "CR",
-          "state": "agreed",
-          "source": "Huawei",
+          "agenda": ["5.3.1.3"],
+          "type": ["CR"],
+          "state": ["agreed"],
+          "source": ["Huawei"],
           "tracked": false,
           "include_ephemeral": true,
           "hide_withdrawn": false,
@@ -200,7 +201,11 @@ Rules:
   DB state, not config.
 - `ui.lineage_views` is portable user workspace state: tab names and filters are
   written automatically, and `ui.active_lineage_view` restores the selected tab.
-  These are optional, so older `meeting.json` files still load unchanged.
+  Agenda, type, state, and source filters are arrays because each is a multi-select
+  checkbox list; values within one list match with OR, and different lists combine
+  with AND. Legacy single-string filter values are accepted and migrated to
+  one-element arrays. These fields are optional, so older `meeting.json` files still
+  load unchanged.
 - `tdoc_series_prefix` expands short hints (`3846` → `S3-263846`) and is never guessed
   from filenames.
 - The config is validated on startup against a JSON Schema; unknown keys warn.
@@ -481,7 +486,9 @@ All filename-derived links are **hints** (`source=filename`, inactive ghost edge
 
 ### 7.6 Mail ingestion
 
-- Source: one `mbox` file, one `.eml` file, or a directory of `.eml` files.
+- Source: one `mbox` file, an mbox directory tree, one `.eml` file, or a directory
+  of `.eml` files. A Thunderbird mbox folder file also pulls in its sibling
+  `<name>.sbd` directory; `.msf` indexes are ignored.
   Incremental via mtime/size and Message-ID dedup. No IMAP/POP.
 - Parse headers with stdlib `email`; decode RFC 2047 subjects and bodies.
 - Store the raw message blob (content-addressed) and extracted plain text for FTS5.
@@ -544,6 +551,7 @@ note(id, target_kind, target_ref, body, author, source,
 node_status(target_kind, target_ref, status, updated_at,
             PK(target_kind, target_ref))
 hidden_node(target_kind, target_ref, hidden_at, PK(target_kind, target_ref))
+notification_seen(ref PK, seen_at)
 user_action(id, action, target_kind, target_ref, detail, created_at)
 email(id, message_id PK, thread_id, subject, from_addr, to_addrs, cc_addrs,
       date_utc, agenda_item, meeting_id, body_blob_hash, raw_blob_hash,
@@ -674,8 +682,9 @@ Read:
 - `GET /api/lineage-views` (saved names, filters, active view)
 - `GET /api/artifacts/{id}` (stream)
 - `GET /api/mail?tdoc=&agenda=&q=`
+- `GET /api/mail/{email_id}` (metadata plus decoded plain-text body)
 - `GET /api/discovery`
-- `GET /api/notifications?limit=100`
+- `GET /api/notifications?limit=100` (each item carries its persistent `seen` flag)
 - `GET /api/log?limit=100`
 - `GET /api/conflicts`
 - `GET /api/sync/status`
@@ -684,6 +693,7 @@ Read:
 
 Write:
 - `POST /api/tdocs/{tdoc}/track` / `DELETE`
+- `POST /api/notifications/seen` (`refs` array; idempotently persists seen state)
 - `POST /api/assertions` (manual link), `PATCH /api/assertions/{id}` (activate/mute)
 - `POST /api/conflicts/{id}/resolve`
 - `POST /api/notes`, `PATCH /api/notes/{id}`, `DELETE /api/notes/{id}`
@@ -722,10 +732,13 @@ Three-pane desktop layout, responsive enough for a narrow window.
   **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**. The **+**
   control creates additional, independent lineage tabs; each tab keeps its own
   filter selection, can be renamed through its pencil control or by double-clicking
-  its label, and can be closed (except the last one). The source filter splits the
-  comma-separated source field into individual companies, so a TDoc can be matched
-  by any one of its contributing companies. Tab names, filters, and the active
-  lineage view are persisted in `meeting.json` (`ui.lineage_views` and
+  its label, and can be closed (except the last one). Agenda, type, state, and
+  source filters are checkbox lists; selecting multiple values matches any of them,
+  while different lists combine. Agenda options use numeric section ordering
+  (`5.1.2` before `5.1.10`) and show the agenda topic beside the number. The source
+  list splits the comma-separated source field into individual companies, so a TDoc
+  can be matched by any one of its contributing companies. Tab names, filters, and
+  the active lineage view are persisted in `meeting.json` (`ui.lineage_views` and
   `ui.active_lineage_view`), so reloading the app or moving the meeting folder
   restores the same views. Draft
   visibility filters only the graph; the detail panel still shows all artifacts
@@ -751,6 +764,13 @@ Custom SVG lane renderer, not a graph library:
   lane follows the baseline/revised predecessor rather than the first incoming
   list entry; `has_draft` = dotted child edge; `based_on` = dashed weak/inferred
   link;
+- emails linked to either endpoint appear as envelope markers on the edge, sorted
+  by timeline date; multiple messages collapse to a bulk envelope that expands
+  into individual markers on click. With drafts visible, each mail is placed on
+  the draft segment whose node timestamps bracket it; hiding drafts collects the
+  mails back onto the TDoc edge. Hovering previews the subject and sender;
+  clicking a message opens the shared mail-body dialog, and opening that dialog
+  or clicking elsewhere collapses the expansion again;
 - ghost hints = dotted/dashed, inactive; muted branch = greyed/dashed;
 - **Hide unknown** omits non-HTML nodes with no edge path to an HTML-sourced node;
 - explicitly hidden nodes are omitted unless **Show hidden** is checked, and then
@@ -783,8 +803,10 @@ visually distinct.
   using the tracked timestamp; each TDoc link shows its document title (artifact
   filename for drafts). Unread entries are lightly highlighted; hovering or
   clicking one marks it seen and lowers the tab count while keeping the history
-  visible, and opening a related TDoc or draft marks its entries seen. Tracking
-  changes and note actions are recorded in `user_action` and shown in the Log tab.
+  visible, and opening a related TDoc or draft marks its entries seen. Seen refs
+  are persisted in `notification_seen`, so reloads and restarts keep them read.
+  Tracking changes and note actions are recorded in `user_action` and shown in the
+  Log tab.
 - Each TDoc detail links its official ZIP using the fixed
   `Docs/<tdoc-nr>.zip` path; working draft details do not carry these links.
 - Manual link creation: **revised to** / "merged into" / "merged from", using the

@@ -359,10 +359,10 @@ def test_lineage_views_roundtrip_in_config(tmp_path: Path) -> None:
                 "id": "lineage-1",
                 "label": "Agenda 5.3.1.3",
                 "filters": {
-                    "agenda": "5.3.1.3",
-                    "type": "CR",
-                    "state": "agreed",
-                    "source": "Huawei",
+                    "agenda": ["5.3.1.3", "5.3.1.4"],
+                    "type": ["CR", "LS in"],
+                    "state": ["agreed", "revised"],
+                    "source": ["Huawei", "Nokia"],
                     "tracked": True,
                     "include_ephemeral": False,
                     "hide_withdrawn": True,
@@ -389,7 +389,10 @@ def test_lineage_views_roundtrip_in_config(tmp_path: Path) -> None:
 
     document = json.loads(folder.config_path.read_text())
     assert document["custom"] == {"keep": True}
-    assert document["ui"]["lineage_views"][0]["filters"]["source"] == "Huawei"
+    assert document["ui"]["lineage_views"][0]["filters"]["source"] == [
+        "Huawei",
+        "Nokia",
+    ]
     assert (
         document["ui"]["lineage_views"][0]["filters"]["include_ephemeral"]
         is False
@@ -580,3 +583,29 @@ def test_track_expands_lineage_and_notifications(tmp_path: Path) -> None:
     assert artifact["tdoc_titles"]["S3-264202"] == "new.docx"
     decision = next(item for item in items if item["kind"] == "decision")
     assert decision["tdoc_titles"]["S3-264202"] == "Original"
+    assert all(item["seen"] is False for item in items)
+
+    marked = client.post(
+        "/api/notifications/seen",
+        json={"refs": [lineage["ref"], artifact["ref"]]},
+    )
+    assert marked.status_code == 200
+    assert marked.json() == {"marked": 2}
+
+    updated = client.get("/api/notifications").json()
+    seen_by_ref = {item["ref"]: item["seen"] for item in updated}
+    assert seen_by_ref[lineage["ref"]] is True
+    assert seen_by_ref[artifact["ref"]] is True
+    assert seen_by_ref[decision["ref"]] is False
+
+    reopened = TestClient(create_app(MeetingFolder.open(folder.path)))
+    restored = reopened.get("/api/notifications").json()
+    assert next(
+        item for item in restored if item["ref"] == lineage["ref"]
+    )["seen"] is True
+    assert next(
+        item for item in restored if item["ref"] == artifact["ref"]
+    )["seen"] is True
+    assert next(
+        item for item in restored if item["ref"] == decision["ref"]
+    )["seen"] is False

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -403,6 +404,82 @@ def timeline(connection: sqlite3.Connection, tdoc_number: str) -> list[dict]:
     return events
 
 
+_EDGE_KIND_PRIORITY = {
+    "revision_of": 0,
+    "merged_into": 1,
+    "based_on": 2,
+}
+
+
+def _attach_edge_emails(
+    connection: sqlite3.Connection, edges: list[dict]
+) -> None:
+    """Attach each related email to its most relevant visible lineage edge."""
+    for edge in edges:
+        edge["emails"] = []
+    linkable = [edge for edge in edges if edge["kind"] != "has_draft"]
+    if not linkable:
+        return
+    node_ids = {
+        value
+        for edge in linkable
+        for value in (edge["source"], edge["target"])
+    }
+    placeholders = ", ".join("?" for _ in node_ids)
+    rows = connection.execute(
+        "SELECT e.*, m.tdoc_number AS mention_tdoc "
+        "FROM email e JOIN email_mention m ON m.email_id = e.id "
+        f"WHERE m.tdoc_number IN ({placeholders}) "
+        "ORDER BY COALESCE(e.date_utc, e.ingested_at), e.id",
+        tuple(node_ids),
+    ).fetchall()
+    emails: dict[int, dict] = {}
+    mentions: dict[int, set[str]] = {}
+    for row in rows:
+        email_id = int(row["id"])
+        if email_id not in emails:
+            emails[email_id] = _mail_row(row)
+            mentions[email_id] = set()
+        mentions[email_id].add(row["mention_tdoc"])
+
+    for email_id, email in emails.items():
+        tdocs = mentions[email_id]
+        best_edge: dict | None = None
+        best_score = 0
+        best_priority = 99
+        for edge in linkable:
+            source_match = edge["source"] in tdocs
+            target_match = edge["target"] in tdocs
+            score = (
+                3
+                if source_match and target_match
+                else 2
+                if target_match
+                else 1
+                if source_match
+                else 0
+            )
+            if score == 0:
+                continue
+            priority = _EDGE_KIND_PRIORITY.get(edge["kind"], 99)
+            if score > best_score or (
+                score == best_score and priority < best_priority
+            ):
+                best_edge = edge
+                best_score = score
+                best_priority = priority
+        if best_edge is not None:
+            best_edge["emails"].append(email)
+
+    for edge in edges:
+        edge["emails"].sort(
+            key=lambda mail: (
+                mail["date_utc"] or mail["ingested_at"] or "",
+                mail["id"],
+            )
+        )
+
+
 def lineage(
     connection: sqlite3.Connection,
     *,
@@ -453,8 +530,8 @@ def lineage(
         placeholders = ", ".join("?" for _ in node_ids)
         rows = connection.execute(
             "SELECT t.tdoc_number, t.title, t.decision, t.state_source, "
-            "t.agenda_item, t.type, t.source, t.is_tracked, t.is_provisional, "
-            "t.first_seen_at, "
+            "t.agenda_item, t.topic, t.type, t.source, t.is_tracked, "
+            "t.is_provisional, t.first_seen_at, "
             "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'tdoc' "
             "AND n.target_ref = t.tdoc_number) AS notes_count, "
             "ns.status AS node_status, "
@@ -476,6 +553,7 @@ def lineage(
                 "decision": row["decision"],
                 "state_source": row["state_source"],
                 "agenda_item": row["agenda_item"],
+                "topic": row["topic"],
                 "type": row["type"],
                 "source": row["source"],
                 "is_tracked": bool(row["is_tracked"]),
@@ -496,7 +574,8 @@ def lineage(
     if include_drafts and existing_ids:
         drafts = connection.execute(
             "SELECT a.id, a.tdoc_number, a.filename, a.logical_path, a.status, "
-            "a.first_seen_at, a.remote_mtime, t.agenda_item, t.is_tracked, "
+            "a.first_seen_at, a.remote_mtime, t.agenda_item, t.topic, "
+            "t.is_tracked, "
             "(SELECT COUNT(*) FROM note n WHERE n.target_kind = 'draft' "
             "AND n.target_ref = CAST(a.id AS TEXT)) AS notes_count, "
             "ns.status AS node_status, "
@@ -520,6 +599,7 @@ def lineage(
                     "decision": draft["status"],
                     "state_source": "artifact",
                     "agenda_item": draft["agenda_item"],
+                    "topic": draft["topic"],
                     "type": "working draft",
                     "is_tracked": bool(draft["is_tracked"]),
                     "is_provisional": False,
@@ -547,6 +627,7 @@ def lineage(
                     "muted": False,
                 }
             )
+    _attach_edge_emails(connection, edges)
     return {"nodes": nodes, "edges": edges}
 
 
@@ -582,6 +663,17 @@ def list_mail(
         params,
     ).fetchall()
     return [_mail_row(row) for row in rows]
+
+
+def get_mail(connection: sqlite3.Connection, email_id: int) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM email WHERE id = ?", (email_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    data = _mail_row(row)
+    data["body_blob_hash"] = row["body_blob_hash"]
+    return data
 
 
 def _fts_query(text: str) -> str:
@@ -817,8 +909,30 @@ def notifications(
             }
         )
 
+    seen_refs = {
+        row["ref"]
+        for row in connection.execute("SELECT ref FROM notification_seen")
+    }
     items.sort(key=lambda item: item["created_at"] or "", reverse=True)
-    return items[:limit]
+    visible = items[:limit]
+    for item in visible:
+        item["seen"] = item["ref"] in seen_refs
+    return visible
+
+
+def mark_notifications_seen(
+    connection: sqlite3.Connection, refs: Iterable[str]
+) -> int:
+    unique = sorted({ref.strip() for ref in refs if ref and ref.strip()})
+    if not unique:
+        return 0
+    connection.executemany(
+        "INSERT INTO notification_seen(ref) VALUES (?) "
+        "ON CONFLICT(ref) DO NOTHING",
+        [(ref,) for ref in unique],
+    )
+    connection.commit()
+    return len(unique)
 
 
 def set_next_due(

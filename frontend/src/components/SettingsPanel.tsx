@@ -237,13 +237,13 @@ export function SettingsPanel({
                   }
                 >
                   <option value="">Disabled</option>
-                  <option value="mbox">mbox file</option>
+                  <option value="mbox">mbox file or folder</option>
                   <option value="eml">EML file or folder</option>
                 </select>
               </label>
               {mailKind === "mbox" ? (
                 <label className="wide">
-                  mbox file
+                  mbox file or folder
                   <input
                     aria-label="Mail mbox path"
                     required
@@ -268,7 +268,9 @@ export function SettingsPanel({
             </div>
             <p className="hint">
               Local path read by the Mirko process; new mail is ingested on the
-              next sync.
+              next sync. A Thunderbird folder file also includes its sibling{" "}
+              <code>.sbd</code> subfolders, and a directory path is scanned
+              recursively. <code>.msf</code> index files are ignored.
             </p>
           </fieldset>
 

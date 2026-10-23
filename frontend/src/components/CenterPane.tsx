@@ -46,7 +46,6 @@ interface Props {
   conflicts: Conflict[];
   selected: string | null;
   selectedDraft: number | null;
-  favoriteOrder: readonly string[];
   onSelect: (tdoc: string, artifactId?: number) => void;
   onSelectDraft: (artifactId: number) => void;
   focusRequest: { tdoc: string; nonce: number } | null;
@@ -81,7 +80,6 @@ export function CenterPane({
   conflicts,
   selected,
   selectedDraft,
-  favoriteOrder,
   onSelect,
   onSelectDraft,
   focusRequest,
@@ -218,7 +216,6 @@ export function CenterPane({
             onFilters={(next) =>
               onLineageFilters(activeLineageTab.id, next)
             }
-            nodeOrder={favoriteOrder}
             onSelect={onSelect}
             onSelectDraft={onSelectDraft}
             focusRequest={focusRequest}

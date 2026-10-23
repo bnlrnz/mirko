@@ -64,6 +64,21 @@ function currentNotificationPermission(): NotificationPermission | "unsupported"
   return window.Notification.permission;
 }
 
+function mergeSeenNotifications(
+  current: ReadonlySet<string>,
+  items: readonly NotificationItem[],
+): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+  for (const item of items) {
+    if (item.seen !== true || current.has(item.ref)) {
+      continue;
+    }
+    next ??= new Set(current);
+    next.add(item.ref);
+  }
+  return next ?? current;
+}
+
 export default function App() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [tdocs, setTdocs] = useState<TdocSummary[]>([]);
@@ -116,16 +131,23 @@ export default function App() {
   }, []);
 
   const markNotificationsSeen = useCallback((refs: Iterable<string>) => {
+    const unique = [...new Set(refs)].filter(Boolean);
+    if (unique.length === 0) {
+      return;
+    }
     setSeenNotifications((current) => {
       const next = new Set(current);
       let changed = false;
-      for (const ref of refs) {
+      for (const ref of unique) {
         if (!next.has(ref)) {
           next.add(ref);
           changed = true;
         }
       }
       return changed ? next : current;
+    });
+    void api.markNotificationsSeen(unique).catch((caught) => {
+      setError(caught instanceof Error ? caught.message : String(caught));
     });
   }, []);
 
@@ -296,6 +318,9 @@ export default function App() {
       setLineage(lineageData);
       notificationsRef.current = notificationData;
       setNotifications(notificationData);
+      setSeenNotifications((current) =>
+        mergeSeenNotifications(current, notificationData),
+      );
       announceArtifacts(notificationData);
       setLog(logData);
       setSync(syncData);
@@ -814,7 +839,6 @@ export default function App() {
           conflicts={conflicts}
           selected={selected}
           selectedDraft={selectedDraft}
-          favoriteOrder={tdocs.map((row) => row.tdoc_number)}
           onSelect={onSelect}
           onSelectDraft={onSelectDraft}
           focusRequest={lineageFocus}

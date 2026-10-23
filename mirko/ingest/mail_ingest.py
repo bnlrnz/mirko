@@ -157,6 +157,49 @@ def _body_tdocs(text: str, exclude: Iterable[str]) -> list[str]:
     return found
 
 
+def _is_mbox_file(path: Path) -> bool:
+    if not path.is_file() or path.name.startswith("."):
+        return False
+    if path.suffix.lower() == ".msf":
+        return False
+    try:
+        with path.open("rb") as handle:
+            return handle.read(5) == b"From "
+    except OSError:
+        return False
+
+
+def _mbox_tree(root: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(root.rglob("*"))
+        if _is_mbox_file(path)
+    ]
+
+
+def _mbox_candidates(path: Path) -> list[Path]:
+    if path.is_file():
+        candidates = [path]
+        companion = path.with_name(path.name + ".sbd")
+        if companion.is_dir():
+            candidates.extend(_mbox_tree(companion))
+        return list(dict.fromkeys(candidates))
+    if path.is_dir():
+        candidates = _mbox_tree(path)
+        if not candidates:
+            raise MailError(f"no mbox files found under: {path}")
+        return candidates
+    raise MailError(f"mbox not found: {path}")
+
+
+def _mbox_state_key(root: Path, candidate: Path) -> str:
+    base = root.parent if root.is_file() else root
+    try:
+        return candidate.relative_to(base).as_posix()
+    except ValueError:
+        return str(candidate)
+
+
 class MailIngestor:
     def __init__(
         self,
@@ -184,33 +227,83 @@ class MailIngestor:
         raise MailError(f"unsupported mail kind: {mail.kind}")
 
     def ingest_mbox(self, path: Path) -> MailIngestResult:
-        if not path.is_file():
-            raise MailError(f"mbox not found: {path}")
-        stat = path.stat()
+        candidates = _mbox_candidates(path)
         observed_at = _timestamp(self.clock())
         connection = self.folder.connect()
         try:
             state = self._read_state(connection, MBOX_STATE_KEY)
-            if state == {"size": stat.st_size, "mtime": stat.st_mtime}:
+            root_key = str(path.resolve())
+            previous: dict = {}
+            if (
+                state.get("root") == root_key
+                and isinstance(state.get("files"), dict)
+            ):
+                previous = state["files"]
+            legacy_single = "files" not in state and path.is_file()
+
+            next_state: dict[str, list] = {}
+            selected: list[tuple[str, Path]] = []
+            for candidate in candidates:
+                stat = candidate.stat()
+                key = _mbox_state_key(path, candidate)
+                signature = [stat.st_mtime, stat.st_size]
+                next_state[key] = signature
+                changed = previous.get(key) != signature
+                if legacy_single and candidate == path:
+                    changed = not (
+                        state.get("size") == stat.st_size
+                        and state.get("mtime") == stat.st_mtime
+                    )
+                if changed:
+                    selected.append((key, candidate))
+
+            if not selected:
                 return MailIngestResult(
                     kind="mbox", path=str(path), skipped=self._count(connection)
                 )
-            box = mailbox.mbox(str(path), create=False)
-            try:
-                messages = [
-                    (key, box.get_message(key)) for key in box.keys()
-                ]
-            finally:
-                box.close()
-            result = self._ingest_messages(
-                connection,
-                ((key, message, message.as_bytes()) for key, message in messages),
-                observed_at=observed_at,
-            )
+
+            examined = 0
+            new_messages = 0
+            skipped = 0
+            mentions = 0
+            threads_created = 0
+            provisional: list[str] = []
+            errors: list[str] = []
+            successful_state = dict(next_state)
+            for key, candidate in selected:
+                try:
+                    box = mailbox.mbox(str(candidate), create=False)
+                    try:
+                        messages = [
+                            (str(message_key), box.get_message(message_key))
+                            for message_key in box.keys()
+                        ]
+                    finally:
+                        box.close()
+                except Exception as exc:  # noqa: BLE001 - keep other folders
+                    errors.append(f"{key}: {exc}")
+                    successful_state.pop(key, None)
+                    continue
+                result = self._ingest_messages(
+                    connection,
+                    (
+                        (message_key, message, message.as_bytes())
+                        for message_key, message in messages
+                    ),
+                    observed_at=observed_at,
+                )
+                examined += result["examined"]
+                new_messages += result["new_messages"]
+                skipped += result["skipped"]
+                mentions += result["mentions"]
+                threads_created += result["threads_created"]
+                provisional.extend(result["provisional"])
+                errors.extend(f"{key}: {error}" for error in result["errors"])
+
             self._write_state(
                 connection,
                 MBOX_STATE_KEY,
-                {"size": stat.st_size, "mtime": stat.st_mtime},
+                {"root": root_key, "files": successful_state},
             )
             connection.commit()
         except Exception:
@@ -218,7 +311,17 @@ class MailIngestor:
             raise
         finally:
             connection.close()
-        return MailIngestResult(kind="mbox", path=str(path), **result)
+        return MailIngestResult(
+            kind="mbox",
+            path=str(path),
+            examined=examined,
+            new_messages=new_messages,
+            skipped=skipped,
+            mentions=mentions,
+            threads_created=threads_created,
+            provisional=tuple(dict.fromkeys(provisional)),
+            errors=tuple(errors),
+        )
 
     def ingest_eml_dir(self, directory: Path) -> MailIngestResult:
         if directory.is_file():

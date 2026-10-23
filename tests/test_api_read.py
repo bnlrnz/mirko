@@ -316,8 +316,12 @@ def test_lineage_tracked_and_full(
         for node in tracked["nodes"]
     }
     assert statuses == {"S3-264202": ("Support", 1), "S3-264203": (None, 0)}
+    assert {node["topic"] for node in tracked["nodes"]} == {"Topic"}
     assert len(tracked["edges"]) == 1
     assert tracked["edges"][0]["kind"] == "revision_of"
+    edge_mails = tracked["edges"][0]["emails"]
+    assert [mail["message_id"] for mail in edge_mails] == ["t1@example.org"]
+    assert edge_mails[0]["subject"] == "[SA3#130][S3-264202] CR on QUIC"
 
     full = client.get("/api/lineage").json()
     assert any(node["tdoc_number"] == "S3-264999" for node in full["nodes"])
@@ -346,6 +350,43 @@ def test_lineage_tracked_and_full(
     )
 
 
+def test_lineage_orders_multiple_edge_mails_by_timeline(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    connection = seeded_folder.connect()
+    try:
+        for message_id, subject, occurred_at in (
+            ("before@example.org", "Earlier mail", "2026-10-16T11:00:00.000000Z"),
+            ("after@example.org", "Later mail", "2026-10-16T13:00:00.000000Z"),
+        ):
+            cursor = connection.execute(
+                "INSERT INTO email(message_id, subject, from_addr, date_utc, "
+                "ingested_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    message_id,
+                    subject,
+                    "Test <test@example.org>",
+                    occurred_at,
+                    occurred_at,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO email_mention(email_id, tdoc_number, scope, "
+                "confidence) VALUES (?, 'S3-264202', 'body', 0.5)",
+                (cursor.lastrowid,),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    data = client.get("/api/lineage", params={"tracked": "true"}).json()
+    assert [mail["subject"] for mail in data["edges"][0]["emails"]] == [
+        "Earlier mail",
+        "[SA3#130][S3-264202] CR on QUIC",
+        "Later mail",
+    ]
+
+
 def test_lineage_can_include_working_drafts(
     seeded_folder: MeetingFolder, client: TestClient
 ) -> None:
@@ -362,6 +403,7 @@ def test_lineage_can_include_working_drafts(
     assert draft["attached_to"] == "S3-264202"
     assert draft["tdoc_number"].startswith("draft:")
     assert draft["title"] == "draft S3-264202-r1.docx"
+    assert draft["topic"] == "Topic"
     assert draft["status"] in {"present", "remote"}
     assert draft["node_status"] is None
     assert draft["notes_count"] == 0
@@ -412,6 +454,7 @@ def test_lineage_can_include_working_drafts(
             "source_ref": None,
             "active": True,
             "muted": False,
+            "emails": [],
         }
     ]
 
@@ -435,6 +478,12 @@ def test_mail_filters_and_search(client: TestClient) -> None:
     by_tdoc = client.get("/api/mail", params={"tdoc": "S3-264202"}).json()
     assert len(by_tdoc) == 1
     assert by_tdoc[0]["message_id"] == "t1@example.org"
+
+    detail = client.get(f"/api/mail/{by_tdoc[0]['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["message_id"] == "t1@example.org"
+    assert detail.json()["body"] == "Please review."
+    assert client.get("/api/mail/999999").status_code == 404
 
     searched = client.get("/api/mail", params={"q": "QUIC"}).json()
     assert [item["message_id"] for item in searched] == ["t1@example.org"]
@@ -485,6 +534,7 @@ def test_openapi_contains_read_endpoints(client: TestClient) -> None:
         "/api/tdocs/{tdoc_number}/timeline",
         "/api/lineage",
         "/api/mail",
+        "/api/mail/{email_id}",
         "/api/discovery",
         "/api/sync/status",
     ):

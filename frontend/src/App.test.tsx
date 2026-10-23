@@ -24,6 +24,8 @@ function json(data: unknown): Response {
   });
 }
 
+const seenNotificationRefs = new Set<string>();
+
 function installFetch() {
   let nodeHidden = false;
   const mock = vi.fn(
@@ -82,7 +84,24 @@ function installFetch() {
         });
       }
       if (url.startsWith("/api/lineage")) return json(lineage);
-      if (url === "/api/notifications") return json(notifications);
+      if (url === "/api/notifications") {
+        return json(
+          notifications.map((item) => ({
+            ...item,
+            seen: seenNotificationRefs.has(item.ref),
+          })),
+        );
+      }
+      if (url === "/api/notifications/seen" && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const refs = Array.isArray(body.refs) ? body.refs : [];
+        for (const ref of refs) {
+          if (typeof ref === "string") {
+            seenNotificationRefs.add(ref);
+          }
+        }
+        return json({ marked: refs.length });
+      }
       if (url === "/api/log") return json(userActions);
       if (url === "/api/conflicts") return json(conflicts);
       if (url.endsWith("/resolve")) {
@@ -138,6 +157,9 @@ function installFetch() {
         return json({ ...detail, is_hidden: nodeHidden });
       }
       if (url === "/api/tdocs/S3-264202/timeline") return json(timeline);
+      if (url === "/api/mail/1") {
+        return json({ ...detail.emails[0], body: "Please review." });
+      }
       return json({});
     },
   );
@@ -149,6 +171,7 @@ let fetchMock: ReturnType<typeof installFetch>;
 
 describe("App", () => {
   beforeEach(() => {
+    seenNotificationRefs.clear();
     fetchMock = installFetch();
   });
   afterEach(() => {
@@ -198,6 +221,24 @@ describe("App", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("opens the full body of a linked mail", async () => {
+    render(<App />);
+    const rail = await screen.findByLabelText("Tracked TDoc favourites");
+    fireEvent.click(within(rail).getByText("S3-264202"));
+    const panel = await screen.findByLabelText("Detail for S3-264202");
+    fireEvent.click(
+      within(panel).getByRole("button", {
+        name: /Open mail: .* CR on QUIC/,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /Mail: .* CR on QUIC/,
+    });
+    expect(await within(dialog).findByText("Please review.")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("focuses the lineage when a favourite is double-clicked", async () => {
     render(<App />);
     const rail = await screen.findByLabelText("Tracked TDoc favourites");
@@ -210,9 +251,10 @@ describe("App", () => {
   it("filters lineage nodes by category without changing favourites", async () => {
     render(<App />);
     const rail = await screen.findByLabelText("Tracked TDoc favourites");
-    fireEvent.change(screen.getByLabelText("State filter"), {
-      target: { value: "agreed" },
-    });
+    const state = screen.getByRole("group", { name: "State filter" });
+    fireEvent.click(
+      within(state).getByRole("checkbox", { name: "agreed" }),
+    );
 
     await waitFor(() => {
       expect(
@@ -266,9 +308,9 @@ describe("App", () => {
   it("keeps separate filters for each lineage tab", async () => {
     render(<App />);
     await screen.findByRole("tab", { name: "Lineage" });
-    fireEvent.change(screen.getByLabelText("State filter"), {
-      target: { value: "agreed" },
-    });
+    const state = () =>
+      within(screen.getByRole("group", { name: "State filter" }));
+    fireEvent.click(state().getByRole("checkbox", { name: "agreed" }));
     await waitFor(() => {
       expect(
         screen.queryByRole("button", {
@@ -280,14 +322,12 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "New lineage tab" }));
     const second = await screen.findByRole("tab", { name: "Lineage 2" });
     expect(second).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByLabelText("State filter")).toHaveValue("");
+    expect(state().getByRole("checkbox", { name: "agreed" })).not.toBeChecked();
     expect(
       screen.getByRole("button", { name: /S3-264202 Original CR revised/ }),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("State filter"), {
-      target: { value: "revised" },
-    });
+    fireEvent.click(state().getByRole("checkbox", { name: "revised" }));
     await waitFor(() => {
       expect(
         screen.queryByRole("button", {
@@ -297,7 +337,8 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("tab", { name: "Lineage" }));
-    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
+    expect(state().getByRole("checkbox", { name: "agreed" })).toBeChecked();
+    expect(state().getByRole("checkbox", { name: "revised" })).not.toBeChecked();
     expect(
       screen.getByRole("button", { name: /S3-264203 Revised CR agreed/ }),
     ).toBeInTheDocument();
@@ -308,7 +349,8 @@ describe("App", () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Lineage 2" }));
-    expect(screen.getByLabelText("State filter")).toHaveValue("revised");
+    expect(state().getByRole("checkbox", { name: "revised" })).toBeChecked();
+    expect(state().getByRole("checkbox", { name: "agreed" })).not.toBeChecked();
   });
 
   it("restores and persists lineage views in the meeting config", async () => {
@@ -319,10 +361,10 @@ describe("App", () => {
           id: "lineage-7",
           label: "Agenda 5.3.1.3",
           filters: {
-            agenda: "",
-            type: "",
-            state: "agreed",
-            source: "",
+            agenda: [],
+            type: [],
+            state: ["agreed"],
+            source: [],
             tracked: false,
             include_ephemeral: true,
             hide_withdrawn: false,
@@ -353,16 +395,17 @@ describe("App", () => {
       name: "Agenda 5.3.1.3",
     });
     expect(restored).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
+    const state = () =>
+      within(screen.getByRole("group", { name: "State filter" }));
+    expect(state().getByRole("checkbox", { name: "agreed" })).toBeChecked();
     expect(
       screen.queryByRole("button", {
         name: /S3-264202 Original CR revised/,
       }),
     ).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("State filter"), {
-      target: { value: "revised" },
-    });
+    fireEvent.click(state().getByRole("checkbox", { name: "agreed" }));
+    fireEvent.click(state().getByRole("checkbox", { name: "revised" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Rename Agenda 5.3.1.3" }),
     );
@@ -378,7 +421,7 @@ describe("App", () => {
             id: "lineage-7",
             label: "Agenda view",
             filters: {
-              state: "revised",
+              state: ["revised"],
               include_ephemeral: true,
             },
           },
@@ -462,8 +505,8 @@ describe("App", () => {
     });
   });
 
-  it("keeps notifications and clears unread state when they are seen", async () => {
-    render(<App />);
+  it("keeps notifications and permanently clears unread state when seen", async () => {
+    const { unmount } = render(<App />);
     const tab = await screen.findByRole("tab", { name: /Notifications/ });
     expect(within(tab).getByText("3")).toBeInTheDocument();
     fireEvent.click(tab);
@@ -494,6 +537,31 @@ describe("App", () => {
       expect(within(tab).queryByText("1")).not.toBeInTheDocument();
     });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input) === "/api/notifications/seen" &&
+          init?.method === "POST",
+      ),
+    ).toBe(true);
+
+    unmount();
+    render(<App />);
+    const restoredTab = await screen.findByRole("tab", {
+      name: /Notifications/,
+    });
+    expect(within(restoredTab).queryByText("3")).not.toBeInTheDocument();
+    expect(within(restoredTab).queryByText("1")).not.toBeInTheDocument();
+    fireEvent.click(restoredTab);
+    const restoredList = await screen.findByLabelText("Tracked TDoc updates");
+    expect(within(restoredList).getAllByRole("listitem")).toHaveLength(3);
+    for (const item of within(restoredList).getAllByRole("listitem")) {
+      expect(item).not.toHaveClass("notification-unread");
+    }
+    const restoredRail = screen.getByLabelText("Tracked TDoc favourites");
+    expect(
+      within(restoredRail).queryByTitle(/New file for S3-264202/),
+    ).not.toBeInTheDocument();
   });
 
   it("highlights and notifies when a new artifact arrives", async () => {

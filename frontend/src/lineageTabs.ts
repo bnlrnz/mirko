@@ -6,10 +6,10 @@ import type {
 } from "./types";
 
 export const EMPTY_FILTERS: Filters = {
-  agenda: "",
-  type: "",
-  state: "",
-  source: "",
+  agenda: [],
+  type: [],
+  state: [],
+  source: [],
   tracked: false,
   includeEphemeral: true,
   hideWithdrawn: false,
@@ -18,6 +18,21 @@ export const EMPTY_FILTERS: Filters = {
   showHidden: false,
 };
 
+type FilterConfigValue = string | readonly string[] | null | undefined;
+
+interface LineageFiltersInput {
+  agenda?: FilterConfigValue;
+  type?: FilterConfigValue;
+  state?: FilterConfigValue;
+  source?: FilterConfigValue;
+  tracked?: boolean;
+  include_ephemeral?: boolean;
+  hide_withdrawn?: boolean;
+  hide_not_treated?: boolean;
+  hide_unknown?: boolean;
+  show_hidden?: boolean;
+}
+
 const VIEW_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const MAX_LINEAGE_LABEL = 80;
 
@@ -25,12 +40,28 @@ export function normalizeLineageLabel(label: string): string {
   return label.trim().slice(0, MAX_LINEAGE_LABEL);
 }
 
+function configValues(value: FilterConfigValue): string[] {
+  if (typeof value === "string") {
+    return value ? [value] : [];
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item && !result.includes(item)) {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
 export function filtersToConfig(filters: Filters): LineageFiltersConfig {
   return {
-    agenda: filters.agenda,
-    type: filters.type,
-    state: filters.state,
-    source: filters.source,
+    agenda: [...filters.agenda],
+    type: [...filters.type],
+    state: [...filters.state],
+    source: [...filters.source],
     tracked: filters.tracked,
     include_ephemeral: filters.includeEphemeral,
     hide_withdrawn: filters.hideWithdrawn,
@@ -41,14 +72,14 @@ export function filtersToConfig(filters: Filters): LineageFiltersConfig {
 }
 
 export function filtersFromConfig(
-  config: Partial<LineageFiltersConfig> | null | undefined,
+  config: LineageFiltersInput | null | undefined,
 ): Filters {
   const value = config ?? {};
   return {
-    agenda: typeof value.agenda === "string" ? value.agenda : "",
-    type: typeof value.type === "string" ? value.type : "",
-    state: typeof value.state === "string" ? value.state : "",
-    source: typeof value.source === "string" ? value.source : "",
+    agenda: configValues(value.agenda),
+    type: configValues(value.type),
+    state: configValues(value.state),
+    source: configValues(value.source),
     tracked: typeof value.tracked === "boolean" ? value.tracked : false,
     includeEphemeral:
       typeof value.include_ephemeral === "boolean"
@@ -88,7 +119,7 @@ export function lineageTabsFromConfig(
     | readonly {
         id?: unknown;
         label?: unknown;
-        filters?: Partial<LineageFiltersConfig> | null;
+        filters?: LineageFiltersInput | null;
       }[]
     | null
     | undefined,
@@ -140,6 +171,12 @@ export function createLineageTab(
   return {
     id: `lineage-${number}`,
     label,
-    filters: { ...EMPTY_FILTERS },
+    filters: {
+      ...EMPTY_FILTERS,
+      agenda: [],
+      type: [],
+      state: [],
+      source: [],
+    },
   };
 }

@@ -4,10 +4,12 @@ import type {
   Conflict,
   ConflictResolution,
   DraftDetail,
+  MailSummary,
   NodeStatus,
   Note,
   TdocDetail,
 } from "../types";
+import { MailDialog } from "./MailViewer";
 import { NODE_ACTIONS, NodeStatusIcon } from "./NodeVisuals";
 
 interface NoteTarget {
@@ -245,6 +247,41 @@ function NoteSection({
           <button type="submit" className="primary">Add note</button>
         </div>
       </form>
+    </section>
+  );
+}
+
+function MailSection({ emails }: { emails: MailSummary[] }) {
+  const [open, setOpen] = useState<MailSummary | null>(null);
+
+  return (
+    <section>
+      <h3>Mail <span className="count">{emails.length}</span></h3>
+      {emails.length === 0 ? (
+        <p className="empty">No linked mail.</p>
+      ) : (
+        <ul className="mail-list">
+          {emails.map((mail) => (
+            <li key={mail.id}>
+              <button
+                type="button"
+                className="mail-open"
+                aria-label={`Open mail: ${mail.subject ?? "(no subject)"}`}
+                onClick={() => setOpen(mail)}
+              >
+                <strong>{mail.subject ?? "(no subject)"}</strong>
+                <small>
+                  {mail.from_addr ?? "unknown sender"} ·{" "}
+                  {mail.date_utc ?? mail.ingested_at}
+                </small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open ? (
+        <MailDialog mail={open} onClose={() => setOpen(null)} />
+      ) : null}
     </section>
   );
 }
@@ -561,24 +598,10 @@ export function DetailPanel({
         )}
       </section>
 
-      <section>
-        <h3>Mail <span className="count">{detail.emails.length}</span></h3>
-        {detail.emails.length === 0 ? (
-          <p className="empty">No linked mail.</p>
-        ) : (
-          <ul className="mail-list">
-            {detail.emails.map((mail) => (
-              <li key={mail.id}>
-                <strong>{mail.subject ?? "(no subject)"}</strong>
-                <small>
-                  {mail.from_addr ?? "unknown sender"} ·{" "}
-                  {mail.date_utc ?? mail.ingested_at}
-                </small>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <MailSection
+        key={`mail:${detail.tdoc_number}`}
+        emails={detail.emails}
+      />
 
       <ActionSection
         key={`tdoc-action:${detail.tdoc_number}`}

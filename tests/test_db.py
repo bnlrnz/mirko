@@ -35,6 +35,7 @@ EXPECTED_TABLES = {
     "user_action",
     "node_status",
     "hidden_node",
+    "notification_seen",
 }
 
 EXPECTED_INDICES = {
@@ -68,7 +69,7 @@ def names(connection: sqlite3.Connection, kind: str) -> set[str]:
 
 def test_discover_migrations_is_numbered_and_ordered() -> None:
     migrations = discover_migrations()
-    assert [migration.version for migration in migrations] == [1, 2, 3, 4, 5, 6]
+    assert [migration.version for migration in migrations] == [1, 2, 3, 4, 5, 6, 7]
     assert [migration.name for migration in migrations] == [
         "initial",
         "projection_views",
@@ -76,6 +77,7 @@ def test_discover_migrations_is_numbered_and_ordered() -> None:
         "user_action",
         "node_status",
         "hidden_node",
+        "notification_seen",
     ]
 
 
@@ -83,12 +85,12 @@ def test_apply_migrations_on_empty_database(tmp_path: Path) -> None:
     connection = connect(tmp_path / "mirko.sqlite", migrate=False)
     try:
         assert schema_version(connection) == 0
-        assert apply_migrations(connection) == [1, 2, 3, 4, 5, 6]
-        assert schema_version(connection) == 6
+        assert apply_migrations(connection) == [1, 2, 3, 4, 5, 6, 7]
+        assert schema_version(connection) == 7
         rows = connection.execute(
             "SELECT version, applied_at FROM schema_migration ORDER BY version"
         ).fetchall()
-        assert [row["version"] for row in rows] == [1, 2, 3, 4, 5, 6]
+        assert [row["version"] for row in rows] == [1, 2, 3, 4, 5, 6, 7]
         assert all(row["applied_at"] for row in rows)
     finally:
         connection.close()
@@ -121,7 +123,7 @@ def test_node_status_migration_extracts_latest_note_tag(tmp_path: Path) -> None:
         )
         connection.commit()
 
-        assert apply_migrations(connection) == [5, 6]
+        assert apply_migrations(connection) == [5, 6, 7]
         status = connection.execute(
             "SELECT status FROM node_status WHERE target_kind = 'tdoc' "
             "AND target_ref = 'S3-264202'"
@@ -142,7 +144,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
         assert apply_migrations(connection) == []
         assert connection.execute(
             "SELECT COUNT(*) FROM schema_migration"
-        ).fetchone()[0] == 6
+        ).fetchone()[0] == 7
     finally:
         connection.close()
 
@@ -153,7 +155,7 @@ def test_connect_sets_pragmas_and_schema(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert schema_version(connection) == 6
+        assert schema_version(connection) == 7
     finally:
         connection.close()
 

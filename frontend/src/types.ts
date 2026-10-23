@@ -140,6 +140,10 @@ export interface MailSummary {
   inference: unknown;
 }
 
+export interface MailDetail extends MailSummary {
+  body: string;
+}
+
 export interface Assertion {
   id: number;
   subject_kind: string;
@@ -179,6 +183,7 @@ export interface NotificationItem {
   created_at: string | null;
   action: "track" | null;
   action_ref: string | null;
+  seen?: boolean;
 }
 
 export type ConflictResolution = "accept_html" | "keep_mine" | "repair";
@@ -232,6 +237,7 @@ export interface LineageNode {
   decision: string | null;
   state_source: string | null;
   agenda_item: string | null;
+  topic?: string | null;
   type: string | null;
   source?: string | null;
   is_tracked: boolean;
@@ -257,6 +263,7 @@ export interface LineageEdge {
   source_ref: string | null;
   active?: boolean;
   muted?: boolean;
+  emails?: MailSummary[];
 }
 
 export interface Lineage {
@@ -281,10 +288,10 @@ export interface SyncStatus {
 }
 
 export interface Filters {
-  agenda: string;
-  type: string;
-  state: string;
-  source: string;
+  agenda: string[];
+  type: string[];
+  state: string[];
+  source: string[];
   tracked: boolean;
   includeEphemeral: boolean;
   hideWithdrawn: boolean;
@@ -300,10 +307,10 @@ export interface LineageTab {
 }
 
 export interface LineageFiltersConfig {
-  agenda: string;
-  type: string;
-  state: string;
-  source: string;
+  agenda: string[];
+  type: string[];
+  state: string[];
+  source: string[];
   tracked: boolean;
   include_ephemeral: boolean;
   hide_withdrawn: boolean;

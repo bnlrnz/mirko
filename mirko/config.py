@@ -195,10 +195,10 @@ class SyncSettings:
 
 @dataclass(frozen=True)
 class LineageFilters:
-    agenda: str = ""
-    type: str = ""
-    state: str = ""
-    source: str = ""
+    agenda: tuple[str, ...] = ()
+    type: tuple[str, ...] = ()
+    state: tuple[str, ...] = ()
+    source: tuple[str, ...] = ()
     tracked: bool = False
     include_ephemeral: bool = True
     hide_withdrawn: bool = False
@@ -706,6 +706,45 @@ def _validate_sync(
     )
 
 
+def _filter_values(
+    data: Mapping[str, Any], key: str, path: str, issues: _Issues
+) -> tuple[str, ...]:
+    """Accept both the legacy single string and a list of selected values."""
+    full = _join(path, key)
+    value = data.get(key, _MISSING)
+    if value is _MISSING or value is None:
+        return ()
+    if isinstance(value, str):
+        if not value.strip():
+            return ()
+        if _CONTROL_RE.search(value):
+            issues.error(full, "must not contain control characters")
+            return ()
+        return (value,)
+    if not isinstance(value, list):
+        issues.error(full, "must be a string or an array of strings")
+        return ()
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        item_path = f"{full}[{index}]"
+        if not isinstance(item, str):
+            issues.error(item_path, "must be a string")
+            continue
+        if _CONTROL_RE.search(item):
+            issues.error(item_path, "must not contain control characters")
+            continue
+        if not item.strip():
+            continue
+        if item in seen:
+            issues.warning(item_path, "duplicate filter value ignored")
+            continue
+        seen.add(item)
+        result.append(item)
+    return tuple(result)
+
+
 def _validate_lineage_filters(
     data: Mapping[str, Any], path: str, issues: _Issues
 ) -> LineageFilters:
@@ -713,46 +752,10 @@ def _validate_lineage_filters(
         data, "filters", path, issues, allowed=_LINEAGE_FILTER_KEYS
     )
     return LineageFilters(
-        agenda=_string(
-            value,
-            "agenda",
-            f"{path}.filters",
-            issues,
-            default="",
-            allow_empty=True,
-            control_safe=True,
-        )
-        or "",
-        type=_string(
-            value,
-            "type",
-            f"{path}.filters",
-            issues,
-            default="",
-            allow_empty=True,
-            control_safe=True,
-        )
-        or "",
-        state=_string(
-            value,
-            "state",
-            f"{path}.filters",
-            issues,
-            default="",
-            allow_empty=True,
-            control_safe=True,
-        )
-        or "",
-        source=_string(
-            value,
-            "source",
-            f"{path}.filters",
-            issues,
-            default="",
-            allow_empty=True,
-            control_safe=True,
-        )
-        or "",
+        agenda=_filter_values(value, "agenda", f"{path}.filters", issues),
+        type=_filter_values(value, "type", f"{path}.filters", issues),
+        state=_filter_values(value, "state", f"{path}.filters", issues),
+        source=_filter_values(value, "source", f"{path}.filters", issues),
         tracked=_boolean(
             value, "tracked", f"{path}.filters", issues, default=False
         ),
