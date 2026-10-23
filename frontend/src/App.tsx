@@ -1,17 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
-import { CenterPane, type CenterTab } from "./components/CenterPane";
+import {
+  CenterPane,
+  lineageTabKey,
+  type CenterTab,
+} from "./components/CenterPane";
 import { DetailPanel } from "./components/DetailPanel";
 import { LeftRail } from "./components/LeftRail";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TopBar } from "./components/TopBar";
+import {
+  createLineageTab,
+  lineageTabsFromConfig,
+  lineageTabsToConfig,
+  normalizeLineageLabel,
+} from "./lineageTabs";
 import type {
   Conflict,
   ConflictResolution,
   DraftDetail,
   Filters,
   Lineage,
+  LineageTab,
   Meeting,
   NodeStatus,
   NotificationItem,
@@ -23,19 +34,6 @@ import type {
   TimelineEvent,
   UserAction,
 } from "./types";
-
-const EMPTY_FILTERS: Filters = {
-  agenda: "",
-  type: "",
-  state: "",
-  source: "",
-  tracked: false,
-  includeEphemeral: true,
-  hideWithdrawn: false,
-  hideNotTreated: false,
-  hideUnknown: false,
-  showHidden: false,
-};
 
 function sendSystemNotification(
   item: NotificationItem,
@@ -69,7 +67,11 @@ function currentNotificationPermission(): NotificationPermission | "unsupported"
 export default function App() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [tdocs, setTdocs] = useState<TdocSummary[]>([]);
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [lineageTabs, setLineageTabs] = useState<LineageTab[]>(() => [
+    createLineageTab(),
+  ]);
+  const [lineageViewsLoaded, setLineageViewsLoaded] = useState(false);
+  const [activeLineageTabId, setActiveLineageTabId] = useState("lineage-1");
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftDetail | null>(null);
@@ -94,7 +96,7 @@ export default function App() {
   const [log, setLog] = useState<UserAction[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
-  const [tab, setTab] = useState<CenterTab>("lineage");
+  const [tab, setTab] = useState<CenterTab>(lineageTabKey("lineage-1"));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [exportPath, setExportPath] = useState<string | null>(null);
@@ -107,6 +109,7 @@ export default function App() {
   const lastSyncMarker = useRef<string | null>(null);
   const knownArtifacts = useRef<Set<string> | null>(null);
   const notificationsRef = useRef<NotificationItem[]>([]);
+  const lineageSaveQueue = useRef<Promise<void>>(Promise.resolve());
 
   const clearArtifactHighlight = useCallback(() => {
     setHighlightArtifact(null);
@@ -201,14 +204,72 @@ export default function App() {
   const onFocusTdoc = useCallback(
     (tdoc: string) => {
       onSelect(tdoc);
-      setTab("lineage");
+      setTab(lineageTabKey(activeLineageTabId));
       setLineageFocus((current) => ({
         tdoc,
         nonce: (current?.nonce ?? 0) + 1,
       }));
     },
-    [onSelect],
+    [activeLineageTabId, onSelect],
   );
+
+  const onAddLineageTab = useCallback(() => {
+    const next = createLineageTab(lineageTabs);
+    setLineageTabs((current) => [...current, next]);
+    setActiveLineageTabId(next.id);
+    setTab(lineageTabKey(next.id));
+  }, [lineageTabs]);
+
+  const onCenterTab = useCallback((next: CenterTab) => {
+    setTab(next);
+    if (next.startsWith("lineage:")) {
+      setActiveLineageTabId(next.slice("lineage:".length));
+    }
+  }, []);
+
+  const onCloseLineageTab = useCallback(
+    (id: string) => {
+      if (lineageTabs.length <= 1) {
+        return;
+      }
+      const index = lineageTabs.findIndex((item) => item.id === id);
+      if (index < 0) {
+        return;
+      }
+      const remaining = lineageTabs.filter((item) => item.id !== id);
+      setLineageTabs(remaining);
+      if (activeLineageTabId === id) {
+        const fallback = remaining[Math.min(index, remaining.length - 1)];
+        setActiveLineageTabId(fallback.id);
+        setTab((current) =>
+          current === lineageTabKey(id)
+            ? lineageTabKey(fallback.id)
+            : current,
+        );
+      }
+    },
+    [activeLineageTabId, lineageTabs],
+  );
+
+  const onRenameLineageTab = useCallback((id: string, label: string) => {
+    const trimmed = normalizeLineageLabel(label);
+    if (!trimmed) {
+      return;
+    }
+    setLineageTabs((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, label: trimmed } : item,
+      ),
+    );
+  }, []);
+
+  const onLineageFilters = useCallback((id: string, filters: Filters) => {
+    setLineageTabs((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, filters } : item,
+      ),
+    );
+  }, []);
 
   const refreshStatic = useCallback(async () => {
     const request = ++staticRequest.current;
@@ -222,11 +283,7 @@ export default function App() {
         conflictData,
       ] = await Promise.all([
         api.meeting(),
-        api.lineage(
-          filters.tracked,
-          false,
-          filters.includeEphemeral,
-        ),
+        api.lineage(false, false, true),
         api.notifications(),
         api.log(),
         api.syncStatus(),
@@ -249,7 +306,7 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     }
-  }, [announceArtifacts, filters.includeEphemeral, filters.tracked]);
+  }, [announceArtifacts]);
 
   const refreshTdocs = useCallback(async () => {
     try {
@@ -266,6 +323,58 @@ export default function App() {
   useEffect(() => {
     void refreshTdocs();
   }, [refreshTdocs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .lineageViews()
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        const views = Array.isArray(data?.views) ? data.views : [];
+        const restored = lineageTabsFromConfig(views);
+        if (restored.length > 0) {
+          const activeId =
+            typeof data.active_id === "string" &&
+            restored.some((tab) => tab.id === data.active_id)
+              ? data.active_id
+              : restored[0].id;
+          setLineageTabs(restored);
+          setActiveLineageTabId(activeId);
+          setTab(lineageTabKey(activeId));
+        }
+        setLineageViewsLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLineageViewsLoaded(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lineageViewsLoaded) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const body = {
+        views: lineageTabsToConfig(lineageTabs),
+        active_id: activeLineageTabId,
+      };
+      lineageSaveQueue.current = lineageSaveQueue.current.then(async () => {
+        try {
+          await api.saveLineageViews(body);
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeLineageTabId, lineageTabs, lineageViewsLoaded]);
 
   useEffect(() => {
     lastSyncMarker.current =
@@ -689,7 +798,12 @@ export default function App() {
         />
         <CenterPane
           tab={tab}
-          onTab={setTab}
+          onTab={onCenterTab}
+          lineageTabs={lineageTabs}
+          onAddLineageTab={onAddLineageTab}
+          onCloseLineageTab={onCloseLineageTab}
+          onRenameLineageTab={onRenameLineageTab}
+          onLineageFilters={onLineageFilters}
           lineage={lineage}
           timeline={timeline}
           notifications={notifications}
@@ -700,9 +814,7 @@ export default function App() {
           conflicts={conflicts}
           selected={selected}
           selectedDraft={selectedDraft}
-          filters={filters}
           favoriteOrder={tdocs.map((row) => row.tdoc_number)}
-          onFilters={setFilters}
           onSelect={onSelect}
           onSelectDraft={onSelectDraft}
           focusRequest={lineageFocus}

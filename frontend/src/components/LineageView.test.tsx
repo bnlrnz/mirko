@@ -95,6 +95,130 @@ describe("LineageView", () => {
     expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
   });
 
+  it("filters to tracked nodes and their direct lineage neighbours", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264240",
+        title: "Tracked CR",
+        decision: "revised",
+        is_tracked: true,
+        state_source: "html",
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264241",
+        title: "Neighbour CR",
+        decision: "revised",
+        is_tracked: false,
+        state_source: "html",
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264242",
+        title: "Isolated CR",
+        decision: "revised",
+        is_tracked: false,
+        state_source: "html",
+      },
+    ];
+    render(
+      <LineageView
+        lineage={{
+          nodes,
+          edges: [
+            {
+              source: "S3-264240",
+              target: "S3-264241",
+              kind: "revision_of",
+              confidence: 1,
+              verified: true,
+              source_ref: null,
+            },
+          ],
+        }}
+        selected={null}
+        filters={{
+          agenda: "",
+          type: "",
+          state: "",
+          source: "",
+          tracked: true,
+          includeEphemeral: true,
+          hideWithdrawn: false,
+          hideNotTreated: false,
+          hideUnknown: false,
+          showHidden: false,
+        }}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Tracked CR")).toBeInTheDocument();
+    expect(screen.getByText("Neighbour CR")).toBeInTheDocument();
+    expect(screen.queryByText("Isolated CR")).not.toBeInTheDocument();
+  });
+
+  it("treats comma-separated sources as individual company filters", () => {
+    const base = lineage.nodes[0];
+    const nodes = [
+      {
+        ...base,
+        tdoc_number: "S3-264250",
+        title: "Combined source CR",
+        source: "Huawei, HiSilicon",
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: "S3-264251",
+        title: "Nokia CR",
+        source: "Nokia",
+        is_tracked: false,
+      },
+    ];
+
+    function Harness() {
+      const [filters, setFilters] = useState({
+        agenda: "",
+        type: "",
+        state: "",
+        source: "",
+        tracked: false,
+        includeEphemeral: true,
+        hideWithdrawn: false,
+        hideNotTreated: false,
+        hideUnknown: false,
+        showHidden: false,
+      });
+      return (
+        <LineageView
+          lineage={{ nodes, edges: [] }}
+          selected={null}
+          filters={filters}
+          onFilters={setFilters}
+          onSelect={vi.fn()}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const source = screen.getByLabelText("Source filter");
+    expect(
+      within(source).queryByRole("option", { name: "Huawei, HiSilicon" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(source).getByRole("option", { name: "Huawei" }),
+    ).toBeInTheDocument();
+    expect(
+      within(source).getByRole("option", { name: "HiSilicon" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(source, { target: { value: "HiSilicon" } });
+    expect(screen.getByText("Combined source CR")).toBeInTheDocument();
+    expect(screen.queryByText("Nokia CR")).not.toBeInTheDocument();
+  });
+
   it("renders nodes, edges and selection", () => {
     const onSelect = vi.fn();
     render(

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Filters, Lineage, LineageEdge, LineageNode } from "../types";
+import { EMPTY_FILTERS } from "../lineageTabs";
+import {
+  sourceMatches,
+  uniqueSourceCompanies,
+} from "../sourceFilter";
 import {
   LANE_HEIGHT,
   LineageNodeGlyph,
@@ -36,18 +41,6 @@ const DRAFT_ORDER = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
-const EMPTY_FILTERS: Filters = {
-  agenda: "",
-  type: "",
-  state: "",
-  source: "",
-  tracked: false,
-  includeEphemeral: true,
-  hideWithdrawn: false,
-  hideNotTreated: false,
-  hideUnknown: false,
-  showHidden: false,
-};
 const WITHDRAWN_STATES = new Set(["withdrawn", "rejected"]);
 const NOT_TREATED_STATES = new Set(["not treated", "not-treated", "reserved"]);
 
@@ -280,7 +273,7 @@ function filterMatches(node: LineageNode, filters: Filters): boolean {
   if (filters.state && node.decision !== filters.state) {
     return false;
   }
-  if (filters.source && node.source !== filters.source) {
+  if (filters.source && !sourceMatches(filters.source, node.source)) {
     return false;
   }
   return true;
@@ -313,6 +306,26 @@ function htmlConnectedIds(lineage: Lineage): Set<string> {
   return connected;
 }
 
+function trackedConnectedIds(lineage: Lineage): Set<string> {
+  const tracked = new Set(
+    lineage.nodes
+      .filter(
+        (node) => node.node_kind !== "draft" && node.is_tracked,
+      )
+      .map((node) => node.tdoc_number),
+  );
+  const connected = new Set(tracked);
+  for (const edge of lineage.edges) {
+    if (tracked.has(edge.source)) {
+      connected.add(edge.target);
+    }
+    if (tracked.has(edge.target)) {
+      connected.add(edge.source);
+    }
+  }
+  return connected;
+}
+
 function hiddenByControls(
   node: LineageNode,
   filters: Filters,
@@ -337,6 +350,7 @@ function hiddenByControls(
 function filterLineage(lineage: Lineage, filters: Filters): Lineage {
   const active =
     Boolean(filters.agenda || filters.type || filters.state || filters.source) ||
+    filters.tracked ||
     filters.hideWithdrawn ||
     filters.hideNotTreated ||
     filters.hideUnknown ||
@@ -347,12 +361,17 @@ function filterLineage(lineage: Lineage, filters: Filters): Lineage {
   const htmlConnected = filters.hideUnknown
     ? htmlConnectedIds(lineage)
     : new Set<string>();
+  const trackedConnected = filters.tracked
+    ? trackedConnectedIds(lineage)
+    : null;
   const keptTdocs = new Set(
     lineage.nodes
       .filter(
         (node) =>
           node.node_kind !== "draft" &&
           filterMatches(node, filters) &&
+          (!trackedConnected ||
+            trackedConnected.has(node.tdoc_number)) &&
           !hiddenByControls(node, filters, htmlConnected),
       )
       .map((node) => node.tdoc_number),
@@ -414,7 +433,7 @@ export function LineageView({
       agendas: uniqueOptions(tdocs.map((node) => node.agenda_item)),
       types: uniqueOptions(tdocs.map((node) => node.type)),
       states: uniqueOptions(tdocs.map((node) => node.decision)),
-      sources: uniqueOptions(tdocs.map((node) => node.source)),
+      sources: uniqueSourceCompanies(tdocs.map((node) => node.source)),
     };
   }, [lineage.nodes]);
   const filteredLineage = useMemo(

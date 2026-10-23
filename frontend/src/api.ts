@@ -6,6 +6,7 @@ import type {
   ExcelImportResult,
   FetchResult,
   Lineage,
+  LineageViews,
   MailSummary,
   Meeting,
   NodeStatus,
@@ -71,6 +72,13 @@ export const api = {
     request<MailSummary[]>(
       `/api/mail${query(params as Record<string, string | undefined>)}`,
     ),
+  lineageViews: () => request<LineageViews>("/api/lineage-views"),
+  saveLineageViews: (body: LineageViews) =>
+    request<LineageViews>("/api/lineage-views", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   notifications: () => request<NotificationItem[]>("/api/notifications"),
   log: () => request<UserAction[]>("/api/log"),
   conflicts: () => request<Conflict[]>("/api/conflicts"),

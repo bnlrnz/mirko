@@ -10,6 +10,8 @@ import pytest
 from mirko.config import (
     ConfigError,
     Hours,
+    LineageFilters,
+    LineageView,
     MailSettings,
     PathSettings,
     PollSettings,
@@ -368,6 +370,138 @@ def test_ui_bar_color_validation(bar_color: str) -> None:
     with pytest.raises(ConfigError) as exc:
         validate_config(data)
     assert "ui.bar_color" in error_text(exc)
+
+
+def test_lineage_views_default_to_empty() -> None:
+    config = validate_config(minimal_config())
+    assert config.ui.lineage_views == ()
+    assert config.ui.active_lineage_view is None
+
+
+def test_lineage_views_map_names_and_filters() -> None:
+    data = minimal_config()
+    data["ui"] = {
+        "bar_color": "#2457c5",
+        "lineage_views": [
+            {
+                "id": "lineage-1",
+                "label": "Agenda 5.3.1.3",
+                "filters": {
+                    "agenda": "5.3.1.3",
+                    "type": "CR",
+                    "state": "agreed",
+                    "source": "Huawei",
+                    "tracked": True,
+                    "include_ephemeral": False,
+                    "hide_withdrawn": True,
+                    "hide_not_treated": True,
+                    "hide_unknown": True,
+                    "show_hidden": True,
+                },
+            },
+            {
+                "id": "tracked",
+                "label": "Tracked only",
+                "filters": {"tracked": True},
+            },
+        ],
+        "active_lineage_view": "tracked",
+    }
+
+    config = validate_config(data)
+
+    assert config.ui.lineage_views == (
+        LineageView(
+            id="lineage-1",
+            label="Agenda 5.3.1.3",
+            filters=LineageFilters(
+                agenda="5.3.1.3",
+                type="CR",
+                state="agreed",
+                source="Huawei",
+                tracked=True,
+                include_ephemeral=False,
+                hide_withdrawn=True,
+                hide_not_treated=True,
+                hide_unknown=True,
+                show_hidden=True,
+            ),
+        ),
+        LineageView(
+            id="tracked",
+            label="Tracked only",
+            filters=LineageFilters(tracked=True),
+        ),
+    )
+    assert config.ui.active_lineage_view == "tracked"
+
+
+@pytest.mark.parametrize(
+    "views, expected",
+    [
+        ("not-a-list", "ui.lineage_views"),
+        ([{"label": "No id"}], "ui.lineage_views[0].id"),
+        ([{"id": "view", "label": ""}], "ui.lineage_views[0].label"),
+        (
+            [{"id": "bad id", "label": "View"}],
+            "ui.lineage_views[0].id",
+        ),
+        (
+            [
+                {"id": "same", "label": "One"},
+                {"id": "same", "label": "Two"},
+            ],
+            "duplicate lineage view id",
+        ),
+        (
+            [{"id": "view", "label": "x" * 81}],
+            "ui.lineage_views[0].label",
+        ),
+        (
+            [{"id": "view", "label": "View", "filters": {"tracked": "yes"}}],
+            "ui.lineage_views[0].filters.tracked",
+        ),
+        (
+            [{"id": "view", "label": "View", "filters": "all"}],
+            "ui.lineage_views[0].filters",
+        ),
+    ],
+)
+def test_lineage_view_errors(views: object, expected: str) -> None:
+    data = minimal_config()
+    data["ui"] = {"lineage_views": views}
+    with pytest.raises(ConfigError) as exc:
+        validate_config(data)
+    assert expected in error_text(exc)
+
+
+def test_active_lineage_view_must_exist() -> None:
+    data = minimal_config()
+    data["ui"] = {
+        "lineage_views": [{"id": "lineage-1", "label": "Lineage"}],
+        "active_lineage_view": "missing",
+    }
+    with pytest.raises(ConfigError) as exc:
+        validate_config(data)
+    assert "ui.active_lineage_view" in error_text(exc)
+
+
+def test_unknown_lineage_view_keys_warn() -> None:
+    data = minimal_config()
+    data["ui"] = {
+        "lineage_views": [
+            {
+                "id": "lineage-1",
+                "label": "Lineage",
+                "filters": {"agenda": "5.3", "unexpected": True},
+                "extra": True,
+            }
+        ]
+    }
+    config = validate_config(data)
+    warnings = "\n".join(config.warnings)
+    assert "ui.lineage_views[0].extra" in warnings
+    assert "ui.lineage_views[0].filters.unexpected" in warnings
 
 
 def test_load_config_from_file(tmp_path: Path) -> None:

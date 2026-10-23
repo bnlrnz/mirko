@@ -163,7 +163,29 @@ everything; no absolute paths are stored.
   },
   "tracked_seed": ["S3-264481", "S3-264388"],
   "sync": { "lazy_drafts": true },
-  "ui": { "default_mode": "auto", "bar_color": "#ffffff" }
+  "ui": {
+    "default_mode": "auto",
+    "bar_color": "#ffffff",
+    "lineage_views": [
+      {
+        "id": "lineage-1",
+        "label": "Agenda 5.3.1.3",
+        "filters": {
+          "agenda": "5.3.1.3",
+          "type": "CR",
+          "state": "agreed",
+          "source": "Huawei",
+          "tracked": false,
+          "include_ephemeral": true,
+          "hide_withdrawn": false,
+          "hide_not_treated": false,
+          "hide_unknown": false,
+          "show_hidden": false
+        }
+      }
+    ],
+    "active_lineage_view": "lineage-1"
+  }
 }
 ```
 
@@ -176,6 +198,9 @@ Rules:
   only `password_set`; it never reads a stored password back to the browser.
 - `tracked_seed` is imported once into the DB; afterwards the tracked set is dynamic
   DB state, not config.
+- `ui.lineage_views` is portable user workspace state: tab names and filters are
+  written automatically, and `ui.active_lineage_view` restores the selected tab.
+  These are optional, so older `meeting.json` files still load unchanged.
 - `tdoc_series_prefix` expands short hints (`3846` → `S3-263846`) and is never guessed
   from filenames.
 - The config is validated on startup against a JSON Schema; unknown keys warn.
@@ -646,6 +671,7 @@ Read:
 - `GET /api/drafts/{artifact_id}`
 - `GET /api/tdocs/{tdoc}/timeline`
 - `GET /api/lineage?tracked=true&include_drafts=true`
+- `GET /api/lineage-views` (saved names, filters, active view)
 - `GET /api/artifacts/{id}` (stream)
 - `GET /api/mail?tdoc=&agenda=&q=`
 - `GET /api/discovery`
@@ -668,6 +694,7 @@ Write:
 - `POST /api/tdocs/{tdoc}/fetch?lineage=true` (download deferred artifacts)
 - `GET|PUT /api/settings` (source, mail source, lazy drafts, auto sync and poll
   intervals, UI bar color; password write-only)
+- `PUT /api/lineage-views` (persist tab names, filters, and active view)
 - `POST /api/import/excel?filename=...&force=true` (raw workbook body)
 - `POST /api/finalize`
 
@@ -692,7 +719,15 @@ Three-pane desktop layout, responsive enough for a narrow window.
   type, state, source, tracked only, **Include Drafts**, **Hide withdrawn**,
   **Hide not treated**, **Hide unknown**, **Show hidden**) or a sortable table
   (default for prep). Tabs:
-  **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**. Draft
+  **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**. The **+**
+  control creates additional, independent lineage tabs; each tab keeps its own
+  filter selection, can be renamed through its pencil control or by double-clicking
+  its label, and can be closed (except the last one). The source filter splits the
+  comma-separated source field into individual companies, so a TDoc can be matched
+  by any one of its contributing companies. Tab names, filters, and the active
+  lineage view are persisted in `meeting.json` (`ui.lineage_views` and
+  `ui.active_lineage_view`), so reloading the app or moving the meeting folder
+  restores the same views. Draft
   visibility filters only the graph; the detail panel still shows all artifacts
   for the selected node.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
@@ -710,6 +745,8 @@ Custom SVG lane renderer, not a graph library:
   panel with artifact metadata, status, and draft-specific notes; artifacts discovered
   during the session highlight their draft node (or parent TDoc when no draft
   node exists) and can raise a browser desktop notification;
+- every lineage tab renders from the same loaded graph but applies its own filter
+  set independently, so switching tabs never changes another tab's view;
 - `revision_of` = straight continuation; `merged_into` = curved convergence whose
   lane follows the baseline/revised predecessor rather than the first incoming
   list entry; `has_draft` = dotted child edge; `based_on` = dashed weak/inferred

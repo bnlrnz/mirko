@@ -1,8 +1,12 @@
+import { useState } from "react";
+
+import { MAX_LINEAGE_LABEL } from "../lineageTabs";
 import type {
   Conflict,
   ConflictResolution,
   Filters,
   Lineage,
+  LineageTab,
   NotificationItem,
   TimelineEvent,
   UserAction,
@@ -14,15 +18,24 @@ import { NotificationsView } from "./NotificationsView";
 import { TimelineView } from "./TimelineView";
 
 export type CenterTab =
-  | "lineage"
   | "timeline"
   | "conflicts"
   | "notifications"
-  | "log";
+  | "log"
+  | `lineage:${string}`;
+
+export function lineageTabKey(id: string): CenterTab {
+  return `lineage:${id}`;
+}
 
 interface Props {
   tab: CenterTab;
   onTab: (tab: CenterTab) => void;
+  lineageTabs: LineageTab[];
+  onAddLineageTab: () => void;
+  onCloseLineageTab: (id: string) => void;
+  onRenameLineageTab: (id: string, label: string) => void;
+  onLineageFilters: (id: string, filters: Filters) => void;
   lineage: Lineage;
   timeline: TimelineEvent[];
   notifications: NotificationItem[];
@@ -33,9 +46,7 @@ interface Props {
   conflicts: Conflict[];
   selected: string | null;
   selectedDraft: number | null;
-  filters: Filters;
   favoriteOrder: readonly string[];
-  onFilters: (filters: Filters) => void;
   onSelect: (tdoc: string, artifactId?: number) => void;
   onSelectDraft: (artifactId: number) => void;
   focusRequest: { tdoc: string; nonce: number } | null;
@@ -46,7 +57,6 @@ interface Props {
 }
 
 const TABS: { id: CenterTab; label: string }[] = [
-  { id: "lineage", label: "Lineage" },
   { id: "timeline", label: "Timeline" },
   { id: "conflicts", label: "Conflicts" },
   { id: "notifications", label: "Notifications" },
@@ -56,6 +66,11 @@ const TABS: { id: CenterTab; label: string }[] = [
 export function CenterPane({
   tab,
   onTab,
+  lineageTabs,
+  onAddLineageTab,
+  onCloseLineageTab,
+  onRenameLineageTab,
+  onLineageFilters,
   lineage,
   timeline,
   notifications,
@@ -66,9 +81,7 @@ export function CenterPane({
   conflicts,
   selected,
   selectedDraft,
-  filters,
   favoriteOrder,
-  onFilters,
   onSelect,
   onSelectDraft,
   focusRequest,
@@ -77,9 +90,102 @@ export function CenterPane({
   onResolve,
   onTrack,
 }: Props) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const activeLineageTab =
+    lineageTabs.find((item) => lineageTabKey(item.id) === tab) ??
+    (tab.startsWith("lineage:") ? lineageTabs[0] : undefined);
+
+  const beginRename = (item: LineageTab) => {
+    setRenamingId(item.id);
+    setRenameValue(item.label);
+  };
+
+  const finishRename = (item: LineageTab, save: boolean) => {
+    if (save) {
+      const label = renameValue.trim();
+      if (label && label !== item.label) {
+        onRenameLineageTab(item.id, label);
+      }
+    }
+    setRenamingId(null);
+  };
+
   return (
     <section className="center-pane">
       <nav className="tabs" role="tablist" aria-label="Center views">
+        {lineageTabs.map((item) => {
+          const active = activeLineageTab?.id === item.id;
+          return (
+            <span
+              key={item.id}
+              className={`lineage-tab${active ? " active" : ""}`}
+            >
+              {renamingId === item.id ? (
+                <input
+                  className="tab-rename"
+                  aria-label={`Rename ${item.label}`}
+                  value={renameValue}
+                  maxLength={MAX_LINEAGE_LABEL}
+                  autoFocus
+                  onChange={(event) => setRenameValue(event.target.value)}
+                  onBlur={() => finishRename(item, true)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      finishRename(item, true);
+                    } else if (event.key === "Escape") {
+                      setRenamingId(null);
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={active ? "active" : ""}
+                  title="Double-click to rename"
+                  onClick={() => onTab(lineageTabKey(item.id))}
+                  onDoubleClick={() => beginRename(item)}
+                >
+                  {item.label}
+                </button>
+              )}
+              {renamingId !== item.id ? (
+                <button
+                  type="button"
+                  className="tab-edit"
+                  aria-label={`Rename ${item.label}`}
+                  title={`Rename ${item.label}`}
+                  onClick={() => beginRename(item)}
+                >
+                  ✎
+                </button>
+              ) : null}
+              {lineageTabs.length > 1 ? (
+                <button
+                  type="button"
+                  className="tab-close"
+                  aria-label={`Close ${item.label}`}
+                  title={`Close ${item.label}`}
+                  onClick={() => onCloseLineageTab(item.id)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </span>
+          );
+        })}
+        <button
+          type="button"
+          className="tab-add"
+          aria-label="New lineage tab"
+          title="New lineage view"
+          onClick={onAddLineageTab}
+        >
+          +
+        </button>
         {TABS.map((item) => (
           <button
             key={item.id}
@@ -103,13 +209,15 @@ export function CenterPane({
         ))}
       </nav>
       <div className="tab-panel" role="tabpanel">
-        {tab === "lineage" ? (
+        {activeLineageTab ? (
           <LineageView
             lineage={lineage}
             selected={selected}
             selectedDraft={selectedDraft}
-            filters={filters}
-            onFilters={onFilters}
+            filters={activeLineageTab.filters}
+            onFilters={(next) =>
+              onLineageFilters(activeLineageTab.id, next)
+            }
             nodeOrder={favoriteOrder}
             onSelect={onSelect}
             onSelectDraft={onSelectDraft}

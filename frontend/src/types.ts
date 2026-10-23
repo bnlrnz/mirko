@@ -292,3 +292,33 @@ export interface Filters {
   hideUnknown: boolean;
   showHidden: boolean;
 }
+
+export interface LineageTab {
+  id: string;
+  label: string;
+  filters: Filters;
+}
+
+export interface LineageFiltersConfig {
+  agenda: string;
+  type: string;
+  state: string;
+  source: string;
+  tracked: boolean;
+  include_ephemeral: boolean;
+  hide_withdrawn: boolean;
+  hide_not_treated: boolean;
+  hide_unknown: boolean;
+  show_hidden: boolean;
+}
+
+export interface LineageViewConfig {
+  id: string;
+  label: string;
+  filters: LineageFiltersConfig;
+}
+
+export interface LineageViews {
+  views: LineageViewConfig[];
+  active_id: string | null;
+}

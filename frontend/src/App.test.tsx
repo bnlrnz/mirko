@@ -32,6 +32,12 @@ function installFetch() {
       const method = init?.method ?? "GET";
       if (url === "/api/meeting") return json(meeting);
       if (url === "/api/settings" && method === "GET") return json(settings);
+      if (url === "/api/lineage-views" && method === "GET") {
+        return json({ views: [], active_id: null });
+      }
+      if (url === "/api/lineage-views" && method === "PUT") {
+        return json(JSON.parse(String(init?.body ?? "{}")));
+      }
       if (url === "/api/status" && method === "PUT") {
         const body = JSON.parse(String(init?.body ?? "{}"));
         return json(body);
@@ -245,17 +251,167 @@ describe("App", () => {
       within(panel).getByRole("link", { name: "draft S3-264202-r1.docx" }),
     ).toBeInTheDocument();
 
+    expect(
+      fetchMock.mock.calls.map((call) => String(call[0])),
+    ).toContain(
+      "/api/lineage?tracked=false&include_inactive=false&include_drafts=true",
+    );
     fireEvent.click(screen.getByLabelText("Include Drafts"));
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.map((call) => String(call[0])),
-      ).toContain(
-        "/api/lineage?tracked=false&include_inactive=false&include_drafts=false",
-      );
-    });
+    expect(screen.getByLabelText("Include Drafts")).not.toBeChecked();
     expect(
       within(panel).getByRole("link", { name: "draft S3-264202-r1.docx" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps separate filters for each lineage tab", async () => {
+    render(<App />);
+    await screen.findByRole("tab", { name: "Lineage" });
+    fireEvent.change(screen.getByLabelText("State filter"), {
+      target: { value: "agreed" },
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", {
+          name: /S3-264202 Original CR revised/,
+        }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New lineage tab" }));
+    const second = await screen.findByRole("tab", { name: "Lineage 2" });
+    expect(second).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("State filter")).toHaveValue("");
+    expect(
+      screen.getByRole("button", { name: /S3-264202 Original CR revised/ }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("State filter"), {
+      target: { value: "revised" },
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", {
+          name: /S3-264203 Revised CR agreed/,
+        }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Lineage" }));
+    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
+    expect(
+      screen.getByRole("button", { name: /S3-264203 Revised CR agreed/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /S3-264202 Original CR revised/,
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Lineage 2" }));
+    expect(screen.getByLabelText("State filter")).toHaveValue("revised");
+  });
+
+  it("restores and persists lineage views in the meeting config", async () => {
+    const original = fetchMock.getMockImplementation();
+    const stored = {
+      views: [
+        {
+          id: "lineage-7",
+          label: "Agenda 5.3.1.3",
+          filters: {
+            agenda: "",
+            type: "",
+            state: "agreed",
+            source: "",
+            tracked: false,
+            include_ephemeral: true,
+            hide_withdrawn: false,
+            hide_not_treated: false,
+            hide_unknown: false,
+            show_hidden: false,
+          },
+        },
+      ],
+      active_id: "lineage-7",
+    };
+    let savedBody: unknown = null;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/lineage-views" && method === "GET") {
+        return json(stored);
+      }
+      if (url === "/api/lineage-views" && method === "PUT") {
+        savedBody = JSON.parse(String(init?.body ?? "{}"));
+        return json(savedBody);
+      }
+      return original!(input, init);
+    });
+
+    render(<App />);
+    const restored = await screen.findByRole("tab", {
+      name: "Agenda 5.3.1.3",
+    });
+    expect(restored).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("State filter")).toHaveValue("agreed");
+    expect(
+      screen.queryByRole("button", {
+        name: /S3-264202 Original CR revised/,
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("State filter"), {
+      target: { value: "revised" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rename Agenda 5.3.1.3" }),
+    );
+    const rename = screen.getByLabelText("Rename Agenda 5.3.1.3");
+    fireEvent.change(rename, { target: { value: "Agenda view" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(savedBody).toMatchObject({
+        active_id: "lineage-7",
+        views: [
+          {
+            id: "lineage-7",
+            label: "Agenda view",
+            filters: {
+              state: "revised",
+              include_ephemeral: true,
+            },
+          },
+        ],
+      });
+    });
+  });
+
+  it("renames and closes lineage tabs", async () => {
+    render(<App />);
+    await screen.findByRole("tab", { name: "Lineage" });
+    fireEvent.click(screen.getByRole("button", { name: "New lineage tab" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Rename Lineage 2" }),
+    );
+    const rename = screen.getByLabelText("Rename Lineage 2");
+    fireEvent.change(rename, { target: { value: "Agenda 5.3.1.3" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+
+    const renamed = await screen.findByRole("tab", {
+      name: "Agenda 5.3.1.3",
+    });
+    expect(renamed).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close Agenda 5.3.1.3" }),
+    );
+    expect(
+      screen.queryByRole("tab", { name: "Agenda 5.3.1.3" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Lineage" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("tracks a TDoc from the left rail star", async () => {

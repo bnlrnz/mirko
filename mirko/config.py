@@ -62,7 +62,24 @@ _POLL_KEYS = frozenset(
     }
 )
 _SYNC_KEYS = frozenset({"lazy_drafts"})
-_UI_KEYS = frozenset({"default_mode", "bar_color"})
+_UI_KEYS = frozenset(
+    {"default_mode", "bar_color", "lineage_views", "active_lineage_view"}
+)
+_LINEAGE_VIEW_KEYS = frozenset({"id", "label", "filters"})
+_LINEAGE_FILTER_KEYS = frozenset(
+    {
+        "agenda",
+        "type",
+        "state",
+        "source",
+        "tracked",
+        "include_ephemeral",
+        "hide_withdrawn",
+        "hide_not_treated",
+        "hide_unknown",
+        "show_hidden",
+    }
+)
 
 _SOURCE_KINDS = frozenset({"local", "remote", "public"})
 _PROTOCOLS = frozenset({"ftp", "ftps", "https"})
@@ -76,6 +93,8 @@ _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _SERIES_PREFIX_RE = re.compile(r"^[A-Za-z0-9]+-\d{2,4}$")
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_LINEAGE_VIEW_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_LINEAGE_LABEL = 80
 
 _MISSING = object()
 
@@ -175,9 +194,32 @@ class SyncSettings:
 
 
 @dataclass(frozen=True)
+class LineageFilters:
+    agenda: str = ""
+    type: str = ""
+    state: str = ""
+    source: str = ""
+    tracked: bool = False
+    include_ephemeral: bool = True
+    hide_withdrawn: bool = False
+    hide_not_treated: bool = False
+    hide_unknown: bool = False
+    show_hidden: bool = False
+
+
+@dataclass(frozen=True)
+class LineageView:
+    id: str
+    label: str
+    filters: LineageFilters = field(default_factory=LineageFilters)
+
+
+@dataclass(frozen=True)
 class UiSettings:
     default_mode: str = "auto"
     bar_color: str = "#ffffff"
+    lineage_views: tuple[LineageView, ...] = ()
+    active_lineage_view: str | None = None
 
 
 @dataclass(frozen=True)
@@ -664,6 +706,134 @@ def _validate_sync(
     )
 
 
+def _validate_lineage_filters(
+    data: Mapping[str, Any], path: str, issues: _Issues
+) -> LineageFilters:
+    value = _object(
+        data, "filters", path, issues, allowed=_LINEAGE_FILTER_KEYS
+    )
+    return LineageFilters(
+        agenda=_string(
+            value,
+            "agenda",
+            f"{path}.filters",
+            issues,
+            default="",
+            allow_empty=True,
+            control_safe=True,
+        )
+        or "",
+        type=_string(
+            value,
+            "type",
+            f"{path}.filters",
+            issues,
+            default="",
+            allow_empty=True,
+            control_safe=True,
+        )
+        or "",
+        state=_string(
+            value,
+            "state",
+            f"{path}.filters",
+            issues,
+            default="",
+            allow_empty=True,
+            control_safe=True,
+        )
+        or "",
+        source=_string(
+            value,
+            "source",
+            f"{path}.filters",
+            issues,
+            default="",
+            allow_empty=True,
+            control_safe=True,
+        )
+        or "",
+        tracked=_boolean(
+            value, "tracked", f"{path}.filters", issues, default=False
+        ),
+        include_ephemeral=_boolean(
+            value,
+            "include_ephemeral",
+            f"{path}.filters",
+            issues,
+            default=True,
+        ),
+        hide_withdrawn=_boolean(
+            value, "hide_withdrawn", f"{path}.filters", issues, default=False
+        ),
+        hide_not_treated=_boolean(
+            value,
+            "hide_not_treated",
+            f"{path}.filters",
+            issues,
+            default=False,
+        ),
+        hide_unknown=_boolean(
+            value, "hide_unknown", f"{path}.filters", issues, default=False
+        ),
+        show_hidden=_boolean(
+            value, "show_hidden", f"{path}.filters", issues, default=False
+        ),
+    )
+
+
+def _validate_lineage_views(
+    data: Mapping[str, Any], issues: _Issues
+) -> tuple[LineageView, ...]:
+    raw = data.get("lineage_views", _MISSING)
+    if raw is _MISSING or raw is None:
+        return ()
+    if not isinstance(raw, list):
+        issues.error("ui.lineage_views", "must be an array")
+        return ()
+
+    views: list[LineageView] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        path = f"ui.lineage_views[{index}]"
+        if not isinstance(item, dict):
+            issues.error(path, "must be an object")
+            continue
+        _unknown_keys(item, path, _LINEAGE_VIEW_KEYS, issues)
+
+        view_id = _string(
+            item, "id", path, issues, required=True, control_safe=True
+        )
+        label = _string(
+            item, "label", path, issues, required=True, control_safe=True
+        )
+        if view_id is not None and not _LINEAGE_VIEW_ID_RE.fullmatch(view_id):
+            issues.error(
+                f"{path}.id",
+                "must contain only letters, digits, '_' or '-', "
+                "and be at most 64 characters",
+            )
+        if label is not None and len(label) > _MAX_LINEAGE_LABEL:
+            issues.error(
+                f"{path}.label",
+                f"must be at most {_MAX_LINEAGE_LABEL} characters",
+            )
+        if view_id is None or label is None:
+            continue
+        if view_id in seen:
+            issues.error(f"{path}.id", "duplicate lineage view id")
+            continue
+        seen.add(view_id)
+        views.append(
+            LineageView(
+                id=view_id,
+                label=label,
+                filters=_validate_lineage_filters(item, path, issues),
+            )
+        )
+    return tuple(views)
+
+
 def _validate_ui(data: Mapping[str, Any], issues: _Issues) -> UiSettings:
     value = _object(data, "ui", "", issues, allowed=_UI_KEYS)
     mode = _string(value, "default_mode", "ui", issues, default="auto")
@@ -679,7 +849,23 @@ def _validate_ui(data: Mapping[str, Any], issues: _Issues) -> UiSettings:
     assert bar_color is not None
     if not _HEX_COLOR_RE.fullmatch(bar_color):
         issues.error("ui.bar_color", "must be a hex color like '#2457c5'")
-    return UiSettings(default_mode=mode, bar_color=bar_color)
+    lineage_views = _validate_lineage_views(value, issues)
+    active_lineage_view = _string(
+        value, "active_lineage_view", "ui", issues, control_safe=True
+    )
+    if active_lineage_view and active_lineage_view not in {
+        view.id for view in lineage_views
+    }:
+        issues.error(
+            "ui.active_lineage_view",
+            "must reference an entry in ui.lineage_views",
+        )
+    return UiSettings(
+        default_mode=mode,
+        bar_color=bar_color,
+        lineage_views=lineage_views,
+        active_lineage_view=active_lineage_view,
+    )
 
 
 def _validate(

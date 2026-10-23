@@ -11,7 +11,7 @@ from typing import Any, Callable, Literal
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mirko import __version__
 from mirko import repository
@@ -403,6 +403,35 @@ class SettingsUpdate(BaseModel):
     bar_color: str | None = None
 
 
+class LineageFiltersModel(BaseModel):
+    agenda: str = ""
+    type: str = ""
+    state: str = ""
+    source: str = ""
+    tracked: bool = False
+    include_ephemeral: bool = True
+    hide_withdrawn: bool = False
+    hide_not_treated: bool = False
+    hide_unknown: bool = False
+    show_hidden: bool = False
+
+
+class LineageViewModel(BaseModel):
+    id: str
+    label: str
+    filters: LineageFiltersModel = Field(default_factory=LineageFiltersModel)
+
+
+class LineageViewsResponse(BaseModel):
+    views: list[LineageViewModel]
+    active_id: str | None = None
+
+
+class LineageViewsUpdate(BaseModel):
+    views: list[LineageViewModel]
+    active_id: str | None = None
+
+
 class ExcelImportResponse(BaseModel):
     status: str
     path: str
@@ -563,6 +592,55 @@ def create_app(
     @app.get("/api/settings", response_model=SettingsResponse)
     def get_settings() -> SettingsResponse:
         return settings_response()
+
+    def lineage_views_response() -> LineageViewsResponse:
+        config = folder.config
+        return LineageViewsResponse(
+            views=[
+                LineageViewModel(
+                    id=view.id,
+                    label=view.label,
+                    filters=LineageFiltersModel(
+                        agenda=view.filters.agenda,
+                        type=view.filters.type,
+                        state=view.filters.state,
+                        source=view.filters.source,
+                        tracked=view.filters.tracked,
+                        include_ephemeral=view.filters.include_ephemeral,
+                        hide_withdrawn=view.filters.hide_withdrawn,
+                        hide_not_treated=view.filters.hide_not_treated,
+                        hide_unknown=view.filters.hide_unknown,
+                        show_hidden=view.filters.show_hidden,
+                    ),
+                )
+                for view in config.ui.lineage_views
+            ],
+            active_id=config.ui.active_lineage_view,
+        )
+
+    @app.get("/api/lineage-views", response_model=LineageViewsResponse)
+    def get_lineage_views() -> LineageViewsResponse:
+        return lineage_views_response()
+
+    @app.put("/api/lineage-views", response_model=LineageViewsResponse)
+    def put_lineage_views(payload: LineageViewsUpdate) -> LineageViewsResponse:
+        with settings_lock:
+            data = folder.config_document()
+            ui = data.setdefault("ui", {})
+            ui["lineage_views"] = [
+                view.model_dump() for view in payload.views
+            ]
+            if not payload.active_id:
+                ui.pop("active_lineage_view", None)
+            else:
+                ui["active_lineage_view"] = payload.active_id
+            try:
+                folder.update_config(data)
+            except ConfigError as exc:
+                raise HTTPException(
+                    status_code=422, detail=list(exc.errors)
+                ) from None
+        return lineage_views_response()
 
     @app.put("/api/settings", response_model=SettingsResponse)
     def put_settings(payload: SettingsUpdate) -> SettingsResponse:

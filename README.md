@@ -82,7 +82,16 @@ tracking and note actions.
 
 Filters (agenda, type, state, source, tracked only, **Include Drafts**, **Hide
 withdrawn**, **Hide not treated**, **Hide unknown**, and **Show hidden**) live in
-the Lineage toolbar. Unknown nodes are non-HTML nodes with no path to an HTML node.
+the Lineage toolbar. The source filter splits the agenda's comma-separated source
+field into individual company names, so a TDoc submitted by `Huawei, HiSilicon`
+matches both `Huawei` and `HiSilicon`. The **+** control creates additional lineage
+tabs, each with its own independent filter set, so different views (for example one
+agenda item and one tracked-only view) can be kept side by side. Double-click a tab
+label or use its pencil control to rename it; close extra tabs with the × control.
+Tab names, filters, and the active lineage view are stored in `meeting.json` under
+`ui.lineage_views` and `ui.active_lineage_view`, so reloading the page or moving the
+meeting folder to another machine restores the same views.
+Unknown nodes are non-HTML nodes with no path to an HTML node.
 Draft visibility only affects the graph, never the selected node's detail panel.
 **Hide** / **Show** under **Visibility** in the detail panel suppresses or restores
 a TDoc or draft in lineage without deleting it; **Show hidden** reveals explicitly
@@ -114,14 +123,15 @@ nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flak
 
 Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc}`,
 `/api/drafts/{artifact_id}`, `/api/tdocs/{tdoc}/timeline`, `/api/lineage`,
-`/api/mail`, `/api/discovery`, `/api/conflicts`, `/api/log`, `/api/sync/status`,
-`/api/export/markdown`, `/api/events` (SSE).
+`/api/lineage-views`, `/api/mail`, `/api/discovery`, `/api/conflicts`, `/api/log`,
+`/api/sync/status`, `/api/export/markdown`, `/api/events` (SSE).
 
 Write: `POST /api/sync`, `POST /api/tdocs/{tdoc}/fetch`,
 `POST|DELETE /api/tdocs/{tdoc}/track`, `POST /api/assertions`,
 `PATCH /api/assertions/{id}`, `POST /api/conflicts/{id}/resolve`, `POST /api/notes`,
 `PATCH|DELETE /api/notes/{id}`, `PUT /api/status`, `PUT /api/hidden`,
-`GET|PUT /api/settings`, `POST /api/import/excel`, `POST /api/finalize`.
+`GET|PUT /api/settings`, `GET|PUT /api/lineage-views`, `POST /api/import/excel`,
+`POST /api/finalize`.
 
 ## Methodology
 

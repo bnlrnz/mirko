@@ -342,6 +342,76 @@ def test_settings_roundtrip_preserves_unknown_keys(tmp_path: Path) -> None:
     assert "ui.bar_color" in invalid_color.text
 
 
+def test_lineage_views_roundtrip_in_config(tmp_path: Path) -> None:
+    folder = MeetingFolder.create(tmp_path / "SA3-130", minimal_config())
+    data = json.loads(folder.config_path.read_text())
+    data["custom"] = {"keep": True}
+    folder.update_config(data)
+    client = TestClient(create_app(folder))
+
+    empty = client.get("/api/lineage-views")
+    assert empty.status_code == 200
+    assert empty.json() == {"views": [], "active_id": None}
+
+    payload = {
+        "views": [
+            {
+                "id": "lineage-1",
+                "label": "Agenda 5.3.1.3",
+                "filters": {
+                    "agenda": "5.3.1.3",
+                    "type": "CR",
+                    "state": "agreed",
+                    "source": "Huawei",
+                    "tracked": True,
+                    "include_ephemeral": False,
+                    "hide_withdrawn": True,
+                    "hide_not_treated": True,
+                    "hide_unknown": True,
+                    "show_hidden": True,
+                },
+            },
+            {
+                "id": "tracked",
+                "label": "Tracked only",
+                "filters": {"tracked": True},
+            },
+        ],
+        "active_id": "tracked",
+    }
+    saved = client.put("/api/lineage-views", json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["active_id"] == "tracked"
+    assert [view["label"] for view in saved.json()["views"]] == [
+        "Agenda 5.3.1.3",
+        "Tracked only",
+    ]
+
+    document = json.loads(folder.config_path.read_text())
+    assert document["custom"] == {"keep": True}
+    assert document["ui"]["lineage_views"][0]["filters"]["source"] == "Huawei"
+    assert (
+        document["ui"]["lineage_views"][0]["filters"]["include_ephemeral"]
+        is False
+    )
+    assert document["ui"]["active_lineage_view"] == "tracked"
+    assert stat.S_IMODE(folder.config_path.stat().st_mode) == 0o600
+
+    reopened = TestClient(create_app(MeetingFolder.open(folder.path)))
+    restored = reopened.get("/api/lineage-views").json()
+    assert restored == saved.json()
+
+    invalid = reopened.put(
+        "/api/lineage-views",
+        json={
+            "views": [{"id": "lineage-1", "label": "Lineage"}],
+            "active_id": "missing",
+        },
+    )
+    assert invalid.status_code == 422
+    assert "ui.active_lineage_view" in invalid.text
+
+
 def test_fetch_endpoint_downloads_deferred_draft(tmp_path: Path) -> None:
     folder = MeetingFolder.create(tmp_path / "SA3-130", minimal_config())
     draft = "Inbox/Drafts/draft S3-264202-r1.docx"
