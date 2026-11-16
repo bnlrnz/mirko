@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from mirko.blob_store import BlobStore
+from mirko.blob_store import BlobInfo, BlobStore
 from mirko.ftp import (
     FtpClient,
     FtpError,
@@ -132,19 +132,9 @@ class Syncer:
         )
         observed_at = _timestamp(self.clock())
         endpoint_id = self.source.endpoint_id
-        connection = self.folder.connect()
-        try:
-            manifest = ManifestStore(connection, endpoint_id)
-            results = [
-                self._sync_path(connection, manifest, path, observed_at)
-                for path in directories
-            ]
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        results = [
+            self._sync_path(path, observed_at) for path in directories
+        ]
 
         return SyncReport(
             endpoint_id=endpoint_id,
@@ -152,13 +142,7 @@ class Syncer:
             paths=tuple(results),
         )
 
-    def _sync_path(
-        self,
-        connection: sqlite3.Connection,
-        manifest: ManifestStore,
-        path: str,
-        observed_at: str,
-    ) -> PathSyncResult:
+    def _sync_path(self, path: str, observed_at: str) -> PathSyncResult:
         directory = normalize_remote_path(path)
         try:
             listing = self.client.list(directory)
@@ -177,106 +161,171 @@ class Syncer:
                 continue
             files.append(entry)
 
-        existing = manifest.load(directory)
-        diff = diff_listing(existing, files)
-        lazy = self._is_lazy(directory)
+        connection = self.folder.connect()
+        try:
+            manifest = ManifestStore(connection, self.source.endpoint_id)
+            existing = manifest.load(directory)
+            diff = diff_listing(existing, files)
+            lazy = self._is_lazy(directory)
 
-        for missing in diff.missing:
-            self._mark_missing(connection, directory, missing, observed_at)
-        manifest.mark_missing(
-            directory, diff.missing, observed_at=observed_at
-        )
-
-        new: list[str] = []
-        changed: list[str] = []
-        unchanged: list[str] = []
-        deferred: list[str] = []
-        failures: list[SyncFailure] = []
-
-        to_fetch = list(diff.needs_fetch)
-        if not lazy:
-            to_fetch.extend(
-                entry
-                for entry in diff.unchanged
-                if existing[entry.name].fetch_state == "pending"
-            )
-        fetch_names = {entry.name for entry in to_fetch}
-
-        for entry in diff.unchanged:
-            if entry.name in fetch_names:
-                continue
-            previous = existing[entry.name]
-            pending = lazy and previous.fetch_state == "pending"
-            blob_hash = None if pending else previous.last_blob_hash
-            manifest.record(
-                directory,
-                entry,
-                blob_hash=blob_hash,
-                observed_at=observed_at,
-                fetch_state="pending" if pending else "cached",
-            )
-            artifact_id, created = self._upsert_artifact(
-                connection,
-                directory,
-                entry,
-                blob_hash=blob_hash,
-                status="remote" if pending else "present",
-                observed_at=observed_at,
-            )
-            if previous.missing_since is not None:
-                self._observe(
-                    connection,
-                    artifact_id,
-                    entry,
-                    blob_hash=blob_hash,
-                    change_kind="returned",
-                    observed_at=observed_at,
+            to_fetch = list(diff.needs_fetch)
+            if not lazy:
+                to_fetch.extend(
+                    entry
+                    for entry in diff.unchanged
+                    if existing[entry.name].fetch_state == "pending"
                 )
-            elif created:
-                self._observe(
-                    connection,
-                    artifact_id,
-                    entry,
-                    blob_hash=blob_hash,
-                    change_kind="created",
-                    observed_at=observed_at,
-                )
-            unchanged.append(entry.name)
+            fetch_names = {entry.name for entry in to_fetch}
 
-        for entry in to_fetch:
-            remote_path = join_remote_path(directory, entry.name)
-            previous = existing.get(entry.name)
-            if lazy:
+            # Download everything before touching the database. SQLite allows
+            # a single writer, so holding a transaction across FTP I/O would
+            # block unrelated writes (such as the API) until they time out.
+            downloaded: dict[str, BlobInfo | FtpError] = {}
+            for entry in to_fetch:
+                if lazy:
+                    continue
+                remote_path = join_remote_path(directory, entry.name)
+                temporary = self._fetch_target()
+                try:
+                    self.client.fetch(remote_path, temporary)
+                    downloaded[entry.name] = self.blobs.add_file(temporary)
+                except FtpError as exc:
+                    logger.warning("fetch failed for %r: %s", remote_path, exc)
+                    downloaded[entry.name] = exc
+                finally:
+                    temporary.unlink(missing_ok=True)
+
+            # All database changes below happen in one short transaction.
+            for missing in diff.missing:
+                self._mark_missing(connection, directory, missing, observed_at)
+            manifest.mark_missing(
+                directory, diff.missing, observed_at=observed_at
+            )
+
+            new: list[str] = []
+            changed: list[str] = []
+            unchanged: list[str] = []
+            deferred: list[str] = []
+            failures: list[SyncFailure] = []
+
+            for entry in diff.unchanged:
+                if entry.name in fetch_names:
+                    continue
+                previous = existing[entry.name]
+                pending = lazy and previous.fetch_state == "pending"
+                blob_hash = None if pending else previous.last_blob_hash
                 manifest.record(
                     directory,
                     entry,
-                    blob_hash=None,
+                    blob_hash=blob_hash,
                     observed_at=observed_at,
-                    fetch_state="pending",
+                    fetch_state="pending" if pending else "cached",
                 )
                 artifact_id, created = self._upsert_artifact(
                     connection,
                     directory,
                     entry,
-                    blob_hash=None,
-                    status="remote",
+                    blob_hash=blob_hash,
+                    status="remote" if pending else "present",
                     observed_at=observed_at,
                 )
-                if previous is None or previous.missing_since is not None:
+                if previous.missing_since is not None:
                     self._observe(
                         connection,
                         artifact_id,
                         entry,
-                        blob_hash=None,
-                        change_kind="deferred",
+                        blob_hash=blob_hash,
+                        change_kind="returned",
                         observed_at=observed_at,
                     )
-                deferred.append(entry.name)
-                continue
-            temporary = self._fetch_target()
-            try:
-                self.client.fetch(remote_path, temporary)
-                blob = self.blobs.add_file(temporary)
+                elif created:
+                    self._observe(
+                        connection,
+                        artifact_id,
+                        entry,
+                        blob_hash=blob_hash,
+                        change_kind="created",
+                        observed_at=observed_at,
+                    )
+                unchanged.append(entry.name)
+
+            for entry in to_fetch:
+                remote_path = join_remote_path(directory, entry.name)
+                previous = existing.get(entry.name)
+                if lazy:
+                    manifest.record(
+                        directory,
+                        entry,
+                        blob_hash=None,
+                        observed_at=observed_at,
+                        fetch_state="pending",
+                    )
+                    artifact_id, created = self._upsert_artifact(
+                        connection,
+                        directory,
+                        entry,
+                        blob_hash=None,
+                        status="remote",
+                        observed_at=observed_at,
+                    )
+                    if previous is None or previous.missing_since is not None:
+                        self._observe(
+                            connection,
+                            artifact_id,
+                            entry,
+                            blob_hash=None,
+                            change_kind="deferred",
+                            observed_at=observed_at,
+                        )
+                    deferred.append(entry.name)
+                    continue
+                result = downloaded[entry.name]
+                if isinstance(result, FtpError):
+                    logger.warning(
+                        "fetch failed for %r: %s", remote_path, result
+                    )
+                    if previous is None:
+                        artifact_id, _ = self._upsert_artifact(
+                            connection,
+                            directory,
+                            entry,
+                            blob_hash=None,
+                            status="failed",
+                            observed_at=observed_at,
+                        )
+                    else:
+                        existing_id = self._artifact_id(
+                            connection, join_remote_path(directory, entry.name)
+                        )
+                        if existing_id is None:
+                            artifact_id, _ = self._upsert_artifact(
+                                connection,
+                                directory,
+                                entry,
+                                blob_hash=previous.last_blob_hash,
+                                status="failed",
+                                observed_at=observed_at,
+                            )
+                        else:
+                            artifact_id = existing_id
+                            connection.execute(
+                                "UPDATE artifact SET status = 'failed' "
+                                "WHERE id = ?",
+                                (artifact_id,),
+                            )
+                    self._observe(
+                        connection,
+                        artifact_id,
+                        entry,
+                        blob_hash=previous.last_blob_hash if previous else None,
+                        change_kind="fetch_failed",
+                        observed_at=observed_at,
+                    )
+                    failures.append(
+                        SyncFailure(path=remote_path, error=str(result))
+                    )
+                    continue
+                blob = result
                 connection.execute(
                     "INSERT OR IGNORE INTO blob(hash, size) VALUES (?, ?)",
                     (blob.hash, blob.size),
@@ -313,47 +362,13 @@ class Syncer:
                     new.append(entry.name)
                 else:
                     changed.append(entry.name)
-            except FtpError as exc:
-                logger.warning("fetch failed for %r: %s", remote_path, exc)
-                if previous is None:
-                    artifact_id, _ = self._upsert_artifact(
-                        connection,
-                        directory,
-                        entry,
-                        blob_hash=None,
-                        status="failed",
-                        observed_at=observed_at,
-                    )
-                else:
-                    existing_id = self._artifact_id(
-                        connection, join_remote_path(directory, entry.name)
-                    )
-                    if existing_id is None:
-                        artifact_id, _ = self._upsert_artifact(
-                            connection,
-                            directory,
-                            entry,
-                            blob_hash=previous.last_blob_hash,
-                            status="failed",
-                            observed_at=observed_at,
-                        )
-                    else:
-                        artifact_id = existing_id
-                        connection.execute(
-                            "UPDATE artifact SET status = 'failed' WHERE id = ?",
-                            (artifact_id,),
-                        )
-                self._observe(
-                    connection,
-                    artifact_id,
-                    entry,
-                    blob_hash=previous.last_blob_hash if previous else None,
-                    change_kind="fetch_failed",
-                    observed_at=observed_at,
-                )
-                failures.append(SyncFailure(path=remote_path, error=str(exc)))
-            finally:
-                temporary.unlink(missing_ok=True)
+
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
         return PathSyncResult(
             path=directory,

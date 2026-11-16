@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -325,3 +326,44 @@ def test_excel_lock_file_is_not_classified_as_allocation(tmp_path: Path) -> None
 
     artifact = artifact_by_path(folder, "~$TDoc_List_Meeting_SA3#130.xlsx")
     assert artifact["kind"] == "remote_file"
+
+
+class _ConcurrentWriteFtpClient(FakeFtpClient):
+    """Attempt an unrelated SQLite write while a fetch is in progress."""
+
+    def __init__(self, files: dict[str, bytes], database_path: Path) -> None:
+        super().__init__(files)
+        self.database_path = database_path
+        self.write_errors: list[Exception] = []
+
+    def fetch(self, path: str, dest: Path) -> None:
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute("PRAGMA busy_timeout = 50")
+            connection.execute(
+                "INSERT INTO notification_seen(ref) VALUES (?) "
+                "ON CONFLICT(ref) DO NOTHING",
+                (f"notified:{path}",),
+            )
+            connection.commit()
+        except Exception as exc:  # noqa: BLE001 - surfaced by the assertion
+            self.write_errors.append(exc)
+        finally:
+            connection.close()
+        super().fetch(path, dest)
+
+
+def test_fetch_does_not_hold_the_sqlite_write_lock(tmp_path: Path) -> None:
+    folder = make_folder(tmp_path)
+    client = _ConcurrentWriteFtpClient(
+        {
+            "Inbox/Drafts/a.docx": b"first",
+            "Inbox/Drafts/b.docx": b"second",
+        },
+        folder.database_path,
+    )
+
+    Syncer(folder, client, clock=lambda: NOW).sync()
+
+    assert client.write_errors == []
+    assert len(rows(folder, "SELECT * FROM notification_seen")) == 2
