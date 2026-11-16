@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 
+import { formatTime } from "../format";
 import type { Meeting, SyncStatus } from "../types";
 
 interface Props {
@@ -19,8 +20,7 @@ function freshness(value: string | null | undefined): string {
   if (!value) {
     return "never";
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
+  return formatTime(value);
 }
 
 function barColors(color: string): CSSProperties {

@@ -1,3 +1,4 @@
+import { formatDateTime } from "../format";
 import type { NotificationItem } from "../types";
 
 interface Props {
@@ -12,8 +13,7 @@ function when(value: string | null): string {
   if (!value) {
     return "";
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 
 export function NotificationsView({

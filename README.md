@@ -134,6 +134,17 @@ npm run build         # tsc --noEmit && vite build
 nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flake)
 ```
 
+## Export vs. finalize
+
+- **Export** (`GET /api/export/markdown`) — read-only snapshot of the current
+  database state as Markdown, streamed as a download. Writes nothing and can be
+  repeated at any time.
+- **Finalize** (`POST /api/finalize`) — end-of-meeting workflow: re-ingests the
+  latest agenda, writes a timestamped file under `exports/`, materializes
+  `cache/mirror/`, and records `finalized`, `finalized_at`, and `export_path` in
+  `meeting_meta`. It is a flag, not a lock: syncing, annotation, and re-finalizing
+  remain allowed.
+
 ## API surface
 
 Read: `/api/meeting`, `/api/health`, `/api/tdocs` (+ filters), `/api/tdocs/{tdoc}`,

@@ -1,3 +1,4 @@
+import { formatDateTime } from "../format";
 import type { TimelineEvent } from "../types";
 
 interface Props {
@@ -9,8 +10,7 @@ function when(value: string | null): string {
   if (!value) {
     return "unknown time";
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 
 export function TimelineView({ events, selected }: Props) {

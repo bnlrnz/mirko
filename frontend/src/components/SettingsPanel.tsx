@@ -270,7 +270,7 @@ export function SettingsPanel({
               Local path read by the Mirko process; new mail is ingested on the
               next sync. A Thunderbird folder (mbox) file also includes its sibling{" "}
               <code>.sbd</code> subfolders, and a directory path is scanned
-              recursively; e.g. '/home/<user>/.thunderbird/cq27arih.default/ImapMail/mail.<mymail>.com/INBOX.sbd/3GPP SA3'
+              recursively; e.g. '/home/&lt;user&gt;/.thunderbird/cq27arih.default/ImapMail/mail.&lt;mymail&gt;.com/INBOX.sbd/3GPP SA3'
             </p>
           </fieldset>
 
