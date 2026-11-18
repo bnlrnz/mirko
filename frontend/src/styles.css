@@ -183,7 +183,7 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 }
 .tab-panel { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
 
-.lineage-view { display: flex; flex-direction: column; height: 100%; min-height: 320px; }
+.lineage-view { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 320px; }
 .lineage-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
 .lineage-toolbar button { border: 1px solid var(--border); background: var(--panel); border-radius: 5px; padding: 2px 8px; }
 .lineage-toolbar-actions { display: inline-flex; gap: 4px; margin-left: auto; }
@@ -238,6 +238,32 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .lineage-scroll.panning { cursor: grabbing; }
 .lineage-canvas { width: max-content; min-width: 100%; min-height: 100%; }
 .lineage-canvas svg { display: block; }
+.agenda-groups { pointer-events: none; }
+.agenda-group rect {
+  fill: rgba(123, 135, 148, 0.06);
+  stroke: #7b8794;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke;
+}
+.agenda-group-label {
+  fill: #475467;
+  font-size: 12px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.agenda-group-topic { fill: #98a2b3; font-weight: 400; }
+.lineage-reset-zoom {
+  position: absolute; right: 14px; bottom: 14px; z-index: 5;
+  border: 1px solid var(--border); background: var(--panel);
+  border-radius: 6px; padding: 4px 10px; font-size: 11px;
+  color: var(--text); cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+}
+.lineage-reset-zoom:hover { background: var(--panel-alt); }
 .edge { fill: none; stroke: #7c8aa0; stroke-width: 2; }
 .edge.revision_of { stroke: #3558a6; }
 .edge.merged_into { stroke: #a35b20; }

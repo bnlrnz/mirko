@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LineageView, chainDrafts, layoutLineage } from "./LineageView";
+import { LineageView, agendaGroupBoxes, chainDrafts, layoutLineage } from "./LineageView";
 import { lineage } from "../test/fixtures";
 import type { Filters, Lineage } from "../types";
 
@@ -49,8 +49,8 @@ describe("LineageView", () => {
   it("starts a merge lane behind the revised baseline", () => {
     const base = lineage.nodes[0];
     const merged = { ...base, tdoc_number: "S3-264300", agenda_item: "1" };
-    const baseline = { ...base, tdoc_number: "S3-264301", agenda_item: "2" };
-    const target = { ...base, tdoc_number: "S3-264302", agenda_item: "3" };
+    const baseline = { ...base, tdoc_number: "S3-264301", agenda_item: "1" };
+    const target = { ...base, tdoc_number: "S3-264302", agenda_item: "1" };
     const layout = layoutLineage({
       nodes: [merged, baseline, target],
       edges: [
@@ -78,6 +78,50 @@ describe("LineageView", () => {
     expect(lanes.get("S3-264301")).toBe(1);
     expect(lanes.get("S3-264302")).toBe(1);
     expect(lanes.get("S3-264302")).not.toBe(lanes.get("S3-264300"));
+  });
+
+  it("gives each agenda item its own non-overlapping band", () => {
+    const base = lineage.nodes[0];
+    const nodes = ["1", "2", "3"].flatMap((agenda, index) => [
+      {
+        ...base,
+        tdoc_number: `S3-2644${index}0`,
+        agenda_item: agenda,
+        is_tracked: false,
+      },
+      {
+        ...base,
+        tdoc_number: `S3-2644${index}1`,
+        agenda_item: agenda,
+        is_tracked: false,
+      },
+    ]);
+    const layout = layoutLineage({ nodes, edges: [] });
+    const boxes = [...agendaGroupBoxes(layout.nodes)].sort(
+      (a, b) => a.y - b.y,
+    );
+
+    expect(boxes.map((box) => box.agenda)).toEqual(["1", "2", "3"]);
+    for (let index = 1; index < boxes.length; index += 1) {
+      const previous = boxes[index - 1];
+      const gap = boxes[index].y - (previous.y + previous.height);
+      // Leave room for the labels that sit just outside each rectangle.
+      expect(gap).toBeGreaterThan(48);
+    }
+
+    for (const node of layout.nodes) {
+      const box = boxes.find((candidate) => candidate.agenda === node.agenda_item);
+      expect(box).toBeDefined();
+      expect(box!.x).toBeLessThanOrEqual(node.x);
+      expect(box!.y).toBeLessThanOrEqual(node.y);
+      expect(box!.x + box!.width).toBeGreaterThanOrEqual(node.x + 190);
+      expect(box!.y + box!.height).toBeGreaterThanOrEqual(node.y + 64);
+    }
+
+    const lowest = boxes[boxes.length - 1];
+    expect(layout.height - (lowest.y + lowest.height)).toBeGreaterThanOrEqual(
+      32,
+    );
   });
 
   afterEach(() => {
@@ -941,6 +985,50 @@ describe("LineageView", () => {
     expect(canvas).not.toHaveClass("panning");
   });
 
+  it("pans from the empty background around the canvas", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const scroll = screen.getByTestId("lineage-scroll");
+    Object.defineProperty(scroll, "clientWidth", {
+      configurable: true,
+      value: 800,
+    });
+    Object.defineProperty(scroll, "clientHeight", {
+      configurable: true,
+      value: 600,
+    });
+    vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    scroll.scrollLeft = 100;
+    scroll.scrollTop = 50;
+
+    fireEvent.pointerDown(scroll, {
+      button: 0,
+      clientX: 700,
+      clientY: 500,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(scroll, {
+      clientX: 650,
+      clientY: 460,
+      pointerId: 1,
+    });
+
+    expect(scroll.scrollLeft).toBe(150);
+    expect(scroll.scrollTop).toBe(90);
+    expect(scroll).toHaveClass("panning");
+    fireEvent.pointerUp(scroll, { pointerId: 1 });
+    expect(scroll).not.toHaveClass("panning");
+  });
+
   it("leaves scrollbar dragging to the native scroller", () => {
     render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
     const canvas = screen.getByTestId("lineage-scroll");
@@ -1107,6 +1195,86 @@ describe("LineageView", () => {
     expect(onSelect).toHaveBeenCalledWith("S3-264203");
     fireEvent.click(screen.getByRole("button", { name: "+" }));
     expect(screen.getByRole("button", { name: "Reset" })).toBeInTheDocument();
+  });
+
+  function canvasZoom(canvas: HTMLElement): number {
+    const match = /scale\(([\d.]+)\)/.exec(canvas.style.transform);
+    return match ? Number(match[1]) : 1;
+  }
+
+  it("zooms with ctrl+wheel and suppresses the browser page zoom", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const scroll = screen.getByTestId("lineage-scroll");
+    const canvas = scroll.querySelector(".lineage-canvas") as HTMLElement;
+
+    expect(
+      fireEvent.wheel(scroll, { deltaY: -200, ctrlKey: true }),
+    ).toBe(false);
+    expect(canvasZoom(canvas)).toBeGreaterThan(1);
+
+    expect(
+      fireEvent.wheel(scroll, { deltaY: 600, ctrlKey: true }),
+    ).toBe(false);
+    expect(canvasZoom(canvas)).toBeLessThan(1);
+  });
+
+  it("does not zoom on a plain mouse wheel", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const scroll = screen.getByTestId("lineage-scroll");
+    const canvas = scroll.querySelector(".lineage-canvas") as HTMLElement;
+
+    expect(fireEvent.wheel(scroll, { deltaY: -200 })).toBe(true);
+    expect(canvasZoom(canvas)).toBe(1);
+  });
+
+  it("always shows agenda group outlines and labels", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const groups = screen.getByTestId("agenda-groups");
+
+    expect(groups.querySelector("rect")).toBeInTheDocument();
+    expect(
+      [...groups.querySelectorAll(".agenda-group-label")].map(
+        (label) => label.textContent,
+      ),
+    ).toEqual(["5.3.1.3", "5.3.1.3"]);
+  });
+
+  it("shows a muted agenda topic beside the label", () => {
+    const topic =
+      "Security architecture and protocols for the next generation of systems";
+    const nodes = lineage.nodes.map((node) => ({ ...node, topic }));
+    render(
+      <LineageView
+        lineage={{ nodes, edges: lineage.edges }}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    );
+    const topics = screen
+      .getByTestId("agenda-groups")
+      .querySelectorAll(".agenda-group-topic");
+
+    expect(topics).toHaveLength(2);
+    expect(topics[0].textContent).toBe(topic);
+  });
+
+  it("resets zoom from the floating button", async () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const scroll = screen.getByTestId("lineage-scroll");
+    const canvas = scroll.querySelector(".lineage-canvas") as HTMLElement;
+
+    expect(
+      screen.queryByRole("button", { name: "Reset zoom" }),
+    ).not.toBeInTheDocument();
+    fireEvent.wheel(scroll, { deltaY: 500, ctrlKey: true });
+    expect(canvasZoom(canvas)).toBeLessThan(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
+
+    await waitFor(() => expect(canvasZoom(canvas)).toBe(1));
+    expect(
+      screen.queryByRole("button", { name: "Reset zoom" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides withdrawn and not-treated nodes through the lineage controls", () => {

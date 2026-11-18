@@ -21,6 +21,7 @@ import { MailDialog } from "./MailViewer";
 import {
   LANE_HEIGHT,
   LineageNodeGlyph,
+  NODE_HEIGHT,
   NODE_WIDTH,
 } from "./NodeVisuals";
 
@@ -45,8 +46,26 @@ interface PositionedNode extends LineageNode {
   depth: number;
 }
 
+interface AgendaGroupBox {
+  agenda: string;
+  topic: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const DEPTH_WIDTH = 230;
-const MARGIN = 36;
+const MARGIN = 52;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 1.8;
+const TOOLBAR_ZOOM_STEP = 0.1;
+const WHEEL_ZOOM_FACTOR = 0.0015;
+const AGENDA_GROUP_PADDING = 16;
+const AGENDA_BAND_GAP = 104;
+const AGENDA_LABEL_MAX_SCALE = 2.2;
+// Room below the lowest rectangle for its bottom-left label at any zoom.
+const AGENDA_BOTTOM_LABEL_SPACE = 40;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const DRAFT_ORDER = new Intl.Collator(undefined, {
   numeric: true,
@@ -310,48 +329,121 @@ export function layoutLineage(lineage: Lineage): {
     }
   }
 
-  const ordered = [...lineage.nodes].sort((a, b) => {
-    const depthDelta =
-      (depth.get(a.tdoc_number) ?? 0) - (depth.get(b.tdoc_number) ?? 0);
-    if (depthDelta !== 0) {
-      return depthDelta;
+  const groups = new Map<string, LineageNode[]>();
+  for (const node of lineage.nodes) {
+    const agenda = node.agenda_item?.trim() ?? "";
+    const group = groups.get(agenda);
+    if (group) {
+      group.push(node);
+    } else {
+      groups.set(agenda, [node]);
     }
-    const agenda = (a.agenda_item ?? "").localeCompare(b.agenda_item ?? "");
-    return agenda !== 0 ? agenda : a.tdoc_number.localeCompare(b.tdoc_number);
-  });
-
-  const laneOf = new Map<string, number>();
-  let laneCount = 0;
-  for (const node of ordered) {
-    const incomingEdges = incoming.get(node.tdoc_number) ?? [];
-    const baselineEdges = incomingEdges.filter(
-      (edge) => edge.kind === "revision_of",
-    );
-    const preferredEdges = baselineEdges.length > 0 ? baselineEdges : incomingEdges;
-    const predecessors = preferredEdges
-      .map((edge) => laneOf.get(edge.source))
-      .filter((lane): lane is number => lane !== undefined);
-    const lane = predecessors.length
-      ? Math.min(...predecessors)
-      : laneCount++;
-    laneOf.set(node.tdoc_number, lane);
   }
 
-  const nodes = ordered.map((node) => {
-    const nodeDepth = depth.get(node.tdoc_number) ?? 0;
-    const lane = laneOf.get(node.tdoc_number) ?? 0;
+  // Each agenda item owns a contiguous vertical band. Edges keep revisions on
+  // the same lane inside a band, but lanes are never shared between bands, so
+  // the agenda rectangles cannot overlap.
+  const nodes: PositionedNode[] = [];
+  let laneCursor = 0;
+  let bandOffset = 0;
+  const orderedGroups = [...groups.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  );
+  for (const [, groupNodes] of orderedGroups) {
+    const inGroup = new Set(groupNodes.map((node) => node.tdoc_number));
+    const ordered = [...groupNodes].sort((a, b) => {
+      const depthDelta =
+        (depth.get(a.tdoc_number) ?? 0) - (depth.get(b.tdoc_number) ?? 0);
+      return depthDelta !== 0
+        ? depthDelta
+        : a.tdoc_number.localeCompare(b.tdoc_number);
+    });
+    const relativeLane = new Map<string, number>();
+    let nextLane = 0;
+    let bandLanes = 0;
+    for (const node of ordered) {
+      const incomingEdges = (incoming.get(node.tdoc_number) ?? []).filter(
+        (edge) => inGroup.has(edge.source),
+      );
+      const baselineEdges = incomingEdges.filter(
+        (edge) => edge.kind === "revision_of",
+      );
+      const preferredEdges =
+        baselineEdges.length > 0 ? baselineEdges : incomingEdges;
+      const predecessors = preferredEdges
+        .map((edge) => relativeLane.get(edge.source))
+        .filter((lane): lane is number => lane !== undefined);
+      const lane = predecessors.length ? Math.min(...predecessors) : nextLane++;
+      relativeLane.set(node.tdoc_number, lane);
+      bandLanes = Math.max(bandLanes, lane + 1);
+    }
+    for (const node of ordered) {
+      const lane = relativeLane.get(node.tdoc_number) ?? 0;
+      const nodeDepth = depth.get(node.tdoc_number) ?? 0;
+      nodes.push({
+        ...node,
+        depth: nodeDepth,
+        lane: laneCursor + lane,
+        x: MARGIN + nodeDepth * DEPTH_WIDTH,
+        y: MARGIN + bandOffset + lane * LANE_HEIGHT,
+      });
+    }
+    laneCursor += bandLanes;
+    bandOffset += bandLanes * LANE_HEIGHT + AGENDA_BAND_GAP;
+  }
+
+  const width = Math.max(
+    320,
+    ...nodes.map((node) => node.x + NODE_WIDTH + MARGIN),
+  );
+  const height = Math.max(
+    180,
+    ...nodes.map((node) => node.y + LANE_HEIGHT),
+    ...agendaGroupBoxes(nodes).map(
+      (box) => box.y + box.height + AGENDA_BOTTOM_LABEL_SPACE,
+    ),
+  );
+  return { nodes, width, height };
+}
+
+export function agendaGroupBoxes(nodes: PositionedNode[]): AgendaGroupBox[] {
+  const byAgenda = new Map<string, PositionedNode[]>();
+  for (const node of nodes) {
+    const agenda = node.agenda_item?.trim();
+    if (!agenda) {
+      continue;
+    }
+    const group = byAgenda.get(agenda);
+    if (group) {
+      group.push(node);
+    } else {
+      byAgenda.set(agenda, [node]);
+    }
+  }
+  return [...byAgenda.entries()].map(([agenda, group]) => {
+    const left = Math.min(...group.map((node) => node.x));
+    const top = Math.min(...group.map((node) => node.y));
+    const right = Math.max(...group.map((node) => node.x + NODE_WIDTH));
+    const bottom = Math.max(...group.map((node) => node.y + NODE_HEIGHT));
     return {
-      ...node,
-      depth: nodeDepth,
-      lane,
-      x: MARGIN + nodeDepth * DEPTH_WIDTH,
-      y: MARGIN + lane * LANE_HEIGHT,
+      agenda,
+      topic: agendaGroupTopic(group),
+      x: left - AGENDA_GROUP_PADDING,
+      y: top - AGENDA_GROUP_PADDING,
+      width: right - left + AGENDA_GROUP_PADDING * 2,
+      height: bottom - top + AGENDA_GROUP_PADDING * 2,
     };
   });
-  const width =
-    Math.max(320, ...nodes.map((node) => node.x + NODE_WIDTH + MARGIN));
-  const height = Math.max(180, ...nodes.map((node) => node.y + LANE_HEIGHT));
-  return { nodes, width, height };
+}
+
+function agendaGroupTopic(nodes: PositionedNode[]): string | null {
+  for (const node of nodes) {
+    const topic = node.topic?.replace(/\s+/g, " ").trim();
+    if (topic) {
+      return topic;
+    }
+  }
+  return null;
 }
 
 function edgePath(edge: LineageEdge, positions: Map<string, PositionedNode>) {
@@ -737,6 +829,12 @@ export function LineageView({
   const [zoom, setZoom] = useState(1);
   const [panning, setPanning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const zoomAnchor = useRef<{
+    contentX: number;
+    contentY: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const pan = useRef<{
     pointerId: number;
     x: number;
@@ -797,6 +895,11 @@ export function LineageView({
     () => layoutLineage(visibleLineage),
     [visibleLineage],
   );
+  const agendaGroups = useMemo(
+    () => agendaGroupBoxes(layout.nodes),
+    [layout.nodes],
+  );
+  const agendaLabelScale = Math.min(1 / zoom, AGENDA_LABEL_MAX_SCALE);
   const positions = useMemo(
     () => new Map(layout.nodes.map((node) => [node.tdoc_number, node])),
     [layout.nodes],
@@ -820,6 +923,54 @@ export function LineageView({
   };
 
   useEffect(() => stopMomentum, []);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      stopMomentum();
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+      // Ctrl+wheel zooms the graph only; never the browser page.
+      event.preventDefault();
+      const rect = container.getBoundingClientRect();
+      const offsetX = event.clientX - rect.left;
+      const offsetY = event.clientY - rect.top;
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      setZoom((current) => {
+        const next = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, current * Math.exp(-delta * WHEEL_ZOOM_FACTOR)),
+        );
+        if (next === current) {
+          return current;
+        }
+        zoomAnchor.current = {
+          contentX: (container.scrollLeft + offsetX) / current,
+          contentY: (container.scrollTop + offsetY) / current,
+          offsetX,
+          offsetY,
+        };
+        return next;
+      });
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [layout.nodes.length]);
+
+  useEffect(() => {
+    const anchor = zoomAnchor.current;
+    const container = scrollRef.current;
+    if (!anchor || !container) {
+      return;
+    }
+    zoomAnchor.current = null;
+    container.scrollLeft = anchor.contentX * zoom - anchor.offsetX;
+    container.scrollTop = anchor.contentY * zoom - anchor.offsetY;
+  }, [zoom]);
 
   useEffect(() => {
     if (!focusRequest) {
@@ -955,12 +1106,19 @@ export function LineageView({
     }
     stopMomentum();
     const target = event.target as Element;
-    if (
-      !target.closest?.(".lineage-canvas") ||
-      target.closest?.(".node") ||
-      target.closest?.(".edge-mail")
-    ) {
+    if (target.closest?.(".node") || target.closest?.(".edge-mail")) {
       return;
+    }
+    if (!target.closest?.(".lineage-canvas")) {
+      // Empty space around the scaled canvas still pans, but a drag that
+      // starts on the native scrollbars must be left to the scroller.
+      const rect = container.getBoundingClientRect();
+      const onScrollbar =
+        event.clientX - rect.left >= container.clientWidth ||
+        event.clientY - rect.top >= container.clientHeight;
+      if (onScrollbar) {
+        return;
+      }
     }
     pan.current = {
       pointerId: event.pointerId,
@@ -1083,10 +1241,24 @@ export function LineageView({
           ))}
         </span>
         <span className="lineage-toolbar-actions">
-          <button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>
+          <button
+            type="button"
+            onClick={() =>
+              setZoom((value) =>
+                Math.max(MIN_ZOOM, value - TOOLBAR_ZOOM_STEP),
+              )
+            }
+          >
             −
           </button>
-          <button type="button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>
+          <button
+            type="button"
+            onClick={() =>
+              setZoom((value) =>
+                Math.min(MAX_ZOOM, value + TOOLBAR_ZOOM_STEP),
+              )
+            }
+          >
             +
           </button>
           <button type="button" onClick={() => setZoom(1)}>
@@ -1223,7 +1395,6 @@ export function LineageView({
         onPointerMove={movePan}
         onPointerUp={endPan}
         onPointerCancel={endPan}
-        onWheel={stopMomentum}
       >
         <div
           className="lineage-canvas"
@@ -1236,6 +1407,50 @@ export function LineageView({
             height={layout.height}
             viewBox={`0 0 ${layout.width} ${layout.height}`}
           >
+            <g
+              className="agenda-groups"
+              data-testid="agenda-groups"
+              aria-hidden="true"
+            >
+              {agendaGroups.map((group) => (
+                <g key={group.agenda} className="agenda-group">
+                  <rect
+                    x={group.x}
+                    y={group.y}
+                    width={group.width}
+                    height={group.height}
+                    rx={10}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <g
+                    transform={`translate(${group.x}, ${group.y}) scale(${agendaLabelScale})`}
+                  >
+                    <text className="agenda-group-label" x={2} y={-6}>
+                      {group.agenda}
+                      {group.topic ? (
+                        <tspan className="agenda-group-topic" dx={8}>
+                          {group.topic}
+                        </tspan>
+                      ) : null}
+                    </text>
+                  </g>
+                  <g
+                    transform={`translate(${group.x}, ${
+                      group.y + group.height
+                    }) scale(${agendaLabelScale})`}
+                  >
+                    <text className="agenda-group-label" x={2} y={14}>
+                      {group.agenda}
+                      {group.topic ? (
+                        <tspan className="agenda-group-topic" dx={8}>
+                          {group.topic}
+                        </tspan>
+                      ) : null}
+                    </text>
+                  </g>
+                </g>
+              ))}
+            </g>
             <g className="edges">
               {visibleEdges.map((edge) => (
                 <path
@@ -1337,6 +1552,17 @@ export function LineageView({
         </div>
       </div>
       )}
+      {zoom !== 1 ? (
+        <button
+          type="button"
+          className="lineage-reset-zoom"
+          aria-label="Reset zoom"
+          title="Reset zoom to 100%"
+          onClick={() => setZoom(1)}
+        >
+          Reset zoom
+        </button>
+      ) : null}
       {mailPreview ? <MailPreviewCard {...mailPreview} /> : null}
       {openMail ? (
         <MailDialog mail={openMail} onClose={() => setOpenMail(null)} />
