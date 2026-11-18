@@ -41,7 +41,9 @@ downloaded on demand. Agenda HTML and Inbox mail remain eager.
   artifacts, provisional numbers and ghost hints.
 - `mirko/ingest/mail_subject.py`, `mail_ingest.py` — RFC2047 subjects/threading and
   mentions from mbox files, recursive mbox directories (including Thunderbird
-  `.sbd` subfolders), a single `.eml` file, or `.eml` trees.
+  `.sbd` subfolders), a single `.eml` file, or `.eml` trees. Only mail tagged for
+  the configured meeting (such as `[SA3#131]`) is ingested; mail for other
+  meetings or without a meeting tag is skipped and pruned.
 - `mirko/worker.py` — one sync + ingestion cycle with sync-state health.
 - `mirko/repository.py`, `api.py` — read models and typed JSON API under `/api`.
 - `mirko/export.py` — deterministic Markdown export, finalize/archive, mirror.

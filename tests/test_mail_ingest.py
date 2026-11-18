@@ -163,6 +163,123 @@ def test_mbox_reingest_is_skipped_by_identity(tmp_path: Path) -> None:
     assert len(rows(folder, "SELECT * FROM email_fts")) == 1
 
 
+def test_mbox_skips_mail_from_other_meetings(tmp_path: Path) -> None:
+    folder, mbox_path = make_mbox_folder(tmp_path)
+    write_mbox(
+        mbox_path,
+        [
+            make_message(
+                message_id="current@example.org",
+                subject="[SA3#130][S3-264202] Current CR",
+                body="Current body.",
+            ),
+            make_message(
+                message_id="old@example.org",
+                subject="Re: [SA3#129][S3-250001] Old CR",
+                body="Old body mentioning S3-250002.",
+            ),
+            make_message(
+                message_id="untagged@example.org",
+                subject="No meeting tag",
+                body="Untagged body.",
+            ),
+        ],
+    )
+
+    result = MailIngestor(folder, clock=lambda: NOW).ingest()
+
+    assert result.examined == 3
+    assert result.new_messages == 1
+    assert result.skipped == 2
+    emails = rows(folder, "SELECT message_id, meeting_id FROM email")
+    assert [(row["message_id"], row["meeting_id"]) for row in emails] == [
+        ("current@example.org", "SA3#130")
+    ]
+    tdocs = {row["tdoc_number"] for row in rows(folder, "SELECT * FROM tdoc")}
+    assert tdocs == {"S3-264202"}
+
+
+def test_prunes_previously_ingested_foreign_mail(tmp_path: Path) -> None:
+    folder, mbox_path = make_mbox_folder(tmp_path)
+    write_mbox(
+        mbox_path,
+        [
+            make_message(
+                message_id="current@example.org",
+                subject="[SA3#130][S3-264202] Current CR",
+                body="Current body.",
+            )
+        ],
+    )
+    ingestor = MailIngestor(folder, clock=lambda: NOW)
+    ingestor.ingest()
+
+    connection = folder.connect()
+    try:
+        cursor = connection.execute(
+            "INSERT INTO thread(normalized_subject) VALUES ('old thread')"
+        )
+        thread_id = int(cursor.lastrowid)
+        cursor = connection.execute(
+            "INSERT INTO tdoc(tdoc_number, source, is_provisional) "
+            "VALUES ('S3-250001', 'email', 1)"
+        )
+        cursor = connection.execute(
+            "INSERT INTO email(message_id, thread_id, subject, meeting_id) "
+            "VALUES ('old@example.org', ?, '[SA3#129] Old', 'SA3#129')",
+            (thread_id,),
+        )
+        email_id = int(cursor.lastrowid)
+        connection.execute(
+            "INSERT INTO email_mention(email_id, tdoc_number, scope) "
+            "VALUES (?, 'S3-250001', 'subject')",
+            (email_id,),
+        )
+        connection.execute(
+            "INSERT INTO email_fts(message_id, body) VALUES ('old@example.org', 'old')"
+        )
+        connection.execute(
+            "INSERT INTO tdoc(tdoc_number, source, is_provisional) "
+            "VALUES ('S3-250002', 'email', 1)"
+        )
+        cursor = connection.execute(
+            "INSERT INTO email(message_id, subject, meeting_id) "
+            "VALUES ('untagged@example.org', 'S3-250002 no meeting tag', NULL)"
+        )
+        email_id = int(cursor.lastrowid)
+        connection.execute(
+            "INSERT INTO email_mention(email_id, tdoc_number, scope) "
+            "VALUES (?, 'S3-250002', 'subject')",
+            (email_id,),
+        )
+        connection.execute(
+            "INSERT INTO email_fts(message_id, body) "
+            "VALUES ('untagged@example.org', 'legacy')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    ingestor.ingest()
+
+    assert rows(folder, "SELECT * FROM email WHERE message_id = 'old@example.org'") == []
+    assert (
+        rows(folder, "SELECT * FROM email WHERE message_id = 'untagged@example.org'")
+        == []
+    )
+    assert rows(folder, "SELECT * FROM email_fts WHERE email_fts MATCH 'old'") == []
+    assert (
+        rows(folder, "SELECT * FROM email_fts WHERE email_fts MATCH 'legacy'") == []
+    )
+    assert (
+        rows(folder, "SELECT * FROM email_mention WHERE tdoc_number = 'S3-250001'")
+        == []
+    )
+    assert rows(folder, "SELECT * FROM thread WHERE id = ?", (thread_id,)) == []
+    tdocs = {row["tdoc_number"] for row in rows(folder, "SELECT * FROM tdoc")}
+    assert tdocs == {"S3-264202"}
+
+
 def test_mbox_file_includes_thunderbird_subfolders(tmp_path: Path) -> None:
     root = tmp_path / "mail" / "3GPP SA3"
     root.parent.mkdir()
@@ -380,7 +497,7 @@ def test_threads_follow_references(tmp_path: Path) -> None:
             ),
             make_message(
                 message_id="reply@example.org",
-                subject="Completely different subject",
+                subject="[SA3#130] Completely different subject",
                 body="Reply.",
                 references="<root@example.org>",
             ),
@@ -472,7 +589,8 @@ def test_bad_message_does_not_stop_ingest(tmp_path: Path) -> None:
     connection = folder.connect()
     try:
         connection.execute(
-            "INSERT INTO email(message_id, subject) VALUES ('good@example.org', 'x')"
+            "INSERT INTO email(message_id, subject, meeting_id) "
+            "VALUES ('good@example.org', 'x', 'SA3#130')"
         )
         connection.commit()
     finally:

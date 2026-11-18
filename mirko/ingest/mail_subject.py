@@ -10,7 +10,7 @@ from mirko.ingest.filename import parse_filename
 _CANON_RE = re.compile(r"(?<![A-Za-z0-9])S3[-_ ]?(\d{6})(?!\d)", re.IGNORECASE)
 _BRACKET_RE = re.compile(r"\[([^\]]*)\]")
 _AGENDA_RE = re.compile(r"^\d+(?:\.\d+)*$")
-_MEETING_RE = re.compile(r"\b([A-Z]{2,4}\d?)#(\d+)\b")
+_MEETING_RE = re.compile(r"\b([A-Z]{2,4}\d?)#(\d+)\b", re.IGNORECASE)
 _BRACKET_REV_RE = re.compile(r"\]\s*-?\s*r(\d{1,3})(?!\d)", re.IGNORECASE)
 _REPLY_PREFIX_RE = re.compile(
     r"^\s*(?:(?:re|fwd|fw|aw|sv|antwort)\s*(?:\[\d+\])?\s*:\s*)+", re.IGNORECASE
@@ -65,7 +65,7 @@ def parse_subject(
     meeting_id: str | None = None
     meeting_match = _MEETING_RE.search(normalized)
     if meeting_match is not None:
-        meeting_id = f"{meeting_match.group(1)}#{meeting_match.group(2)}"
+        meeting_id = f"{meeting_match.group(1).upper()}#{meeting_match.group(2)}"
 
     agenda_items: list[str] = []
     bracket_tdocs: list[str] = []

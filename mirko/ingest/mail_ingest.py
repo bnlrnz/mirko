@@ -25,9 +25,15 @@ _CANON_RE = re.compile(r"(?<![A-Za-z0-9])S3[-_ ]?(\d{6})(?!\d)", re.IGNORECASE)
 _MESSAGE_ID_RE = re.compile(r"<([^<>]+)>")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE = re.compile(r"[ \t]+")
+_MEETING_KEY_RE = re.compile(r"[^A-Za-z0-9]+")
 
 MBOX_STATE_KEY = "mail.mbox.state"
 EML_STATE_KEY = "mail.eml.state"
+
+
+def meeting_key(value: str | None) -> str:
+    """Normalize a meeting tag such as ``SA3#131`` for comparison."""
+    return _MEETING_KEY_RE.sub("", value or "").upper()
 
 
 class MailError(RuntimeError):
@@ -216,6 +222,7 @@ class MailIngestor:
         mail = self.folder.config.mail
         if mail is None:
             return MailIngestResult(kind=None, path=None)
+        self._prune_foreign_mail()
         if mail.kind == "mbox":
             if not mail.path:
                 raise MailError("mail.path is required for an mbox source")
@@ -441,6 +448,8 @@ class MailIngestor:
             subject,
             series_prefix=self.folder.config.meeting.tdoc_series_prefix,
         )
+        if not self._matches_meeting(parsed):
+            return None
         body = extract_plain_text(message)
         normalized = normalize_subject(subject) or message_id
         references = reference_ids(message)
@@ -542,6 +551,80 @@ class MailIngestor:
             (message_id, normalized_subject),
         )
         return int(cursor.lastrowid), True
+
+    def _matches_meeting(self, parsed: SubjectInfo) -> bool:
+        expected = meeting_key(self.folder.config.meeting.id)
+        if not expected:
+            return True
+        return meeting_key(parsed.meeting_id) == expected
+
+    def _prune_foreign_mail(self) -> None:
+        """Drop mail outside this meeting and the provisional nodes it created."""
+        expected = meeting_key(self.folder.config.meeting.id)
+        if not expected:
+            return
+        connection = self.folder.connect()
+        try:
+            foreign = [
+                row
+                for row in connection.execute("SELECT id, meeting_id FROM email")
+                if meeting_key(row["meeting_id"]) != expected
+            ]
+            if not foreign:
+                return
+            connection.execute(
+                "CREATE TEMP TABLE foreign_email(id INTEGER PRIMARY KEY)"
+            )
+            try:
+                connection.executemany(
+                    "INSERT INTO foreign_email(id) VALUES (?)",
+                    [(row["id"],) for row in foreign],
+                )
+                connection.execute(
+                    "DELETE FROM email_mention WHERE email_id IN "
+                    "(SELECT id FROM foreign_email)"
+                )
+                connection.execute(
+                    "DELETE FROM email_fts WHERE message_id IN "
+                    "(SELECT message_id FROM email WHERE id IN "
+                    "(SELECT id FROM foreign_email))"
+                )
+                connection.execute(
+                    "DELETE FROM email WHERE id IN (SELECT id FROM foreign_email)"
+                )
+            finally:
+                connection.execute("DROP TABLE IF EXISTS foreign_email")
+            connection.execute(
+                "DELETE FROM thread WHERE id NOT IN "
+                "(SELECT thread_id FROM email WHERE thread_id IS NOT NULL)"
+            )
+            connection.execute(
+                "DELETE FROM tdoc WHERE is_provisional = 1 "
+                "AND is_tracked = 0 AND COALESCE(source, '') = 'email' "
+                "AND NOT EXISTS (SELECT 1 FROM email_mention m "
+                "WHERE m.tdoc_number = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM artifact a "
+                "WHERE a.tdoc_number = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM tracked_tdoc tt "
+                "WHERE tt.tdoc_number = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM assertion x WHERE "
+                "(x.subject_kind = 'tdoc' AND x.subject_ref = tdoc.tdoc_number) "
+                "OR (x.object_kind = 'tdoc' AND x.object_ref = tdoc.tdoc_number)) "
+                "AND NOT EXISTS (SELECT 1 FROM conflict c "
+                "WHERE c.subject_ref = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM note n WHERE "
+                "n.target_kind = 'tdoc' AND n.target_ref = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM node_status ns WHERE "
+                "ns.target_kind = 'tdoc' AND ns.target_ref = tdoc.tdoc_number) "
+                "AND NOT EXISTS (SELECT 1 FROM hidden_node hn WHERE "
+                "hn.target_kind = 'tdoc' AND hn.target_ref = tdoc.tdoc_number)"
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _count(self, connection: sqlite3.Connection) -> int:
         return int(connection.execute("SELECT COUNT(*) FROM email").fetchone()[0])

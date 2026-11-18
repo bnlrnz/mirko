@@ -506,7 +506,13 @@ All filename-derived links are **hints** (`source=filename`, inactive ghost edge
 - Threading: `References`/`In-Reply-To` first; fallback normalized subject
   (strip `Re:`/`Fwd:`, collapse whitespace). Many 3GPP mails arrive as new
   top-level messages, so subject fallback matters.
-- Scoping: ingest **all** mail, but surface/attach only:
+- Scoping: only messages tagged for the configured meeting (for example
+  `[SA3#131]`) are ingested. Mail tagged for another meeting, or with no meeting
+  tag, is skipped and pruned if an earlier version of the ingestor stored it.
+  Pruning deletes the email row, its FTS entry and mentions, orphaned threads,
+  and provisional TDocs that only existed because of mail (tracked TDocs,
+  artifacts, assertions, notes and manual statuses are never deleted).
+  Within the meeting, surface/attach:
   - TDoc matches in the subject (high confidence),
   - TDoc matches in the body (lower confidence, tagged `scope=body`),
   - agenda-item matches (Discovery view).
