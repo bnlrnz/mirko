@@ -7,6 +7,33 @@ import { lineage } from "../test/fixtures";
 import type { Filters, Lineage } from "../types";
 
 describe("LineageView", () => {
+  function mockScrollMetrics(
+    element: HTMLElement,
+    metrics: {
+      clientWidth: number;
+      clientHeight: number;
+      offsetWidth: number;
+      offsetHeight: number;
+      scrollWidth: number;
+      scrollHeight: number;
+    },
+  ) {
+    for (const [key, value] of Object.entries(metrics)) {
+      Object.defineProperty(element, key, { configurable: true, value });
+    }
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: metrics.offsetWidth,
+      bottom: metrics.offsetHeight,
+      width: metrics.offsetWidth,
+      height: metrics.offsetHeight,
+      toJSON: () => ({}),
+    });
+  }
+
   it("lays out a revision chain on one lane", () => {
     const layout = layoutLineage(lineage);
     expect(layout.nodes).toHaveLength(2);
@@ -1029,20 +1056,28 @@ describe("LineageView", () => {
     expect(scroll).not.toHaveClass("panning");
   });
 
-  it("leaves scrollbar dragging to the native scroller", () => {
+  it("leaves a classic scrollbar drag to the native scroller", () => {
     render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
     const canvas = screen.getByTestId("lineage-scroll");
+    mockScrollMetrics(canvas, {
+      clientWidth: 760,
+      clientHeight: 560,
+      offsetWidth: 776,
+      offsetHeight: 576,
+      scrollWidth: 1600,
+      scrollHeight: 1200,
+    });
     canvas.scrollLeft = 100;
     canvas.scrollTop = 50;
 
     fireEvent.pointerDown(canvas, {
       button: 0,
-      clientX: 500,
+      clientX: 768,
       clientY: 300,
       pointerId: 1,
     });
     fireEvent.pointerMove(canvas, {
-      clientX: 450,
+      clientX: 700,
       clientY: 250,
       pointerId: 1,
     });
@@ -1050,6 +1085,90 @@ describe("LineageView", () => {
 
     expect(canvas.scrollLeft).toBe(100);
     expect(canvas.scrollTop).toBe(50);
+    expect(canvas).not.toHaveClass("panning");
+  });
+
+  it("leaves an overlay scrollbar drag to the native scroller", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const canvas = screen.getByTestId("lineage-scroll");
+    // Overlay scrollbars take no layout space: offset matches client size.
+    mockScrollMetrics(canvas, {
+      clientWidth: 776,
+      clientHeight: 576,
+      offsetWidth: 776,
+      offsetHeight: 576,
+      scrollWidth: 1600,
+      scrollHeight: 1200,
+    });
+    canvas.scrollLeft = 100;
+    canvas.scrollTop = 50;
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      clientX: 770,
+      clientY: 300,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(canvas, {
+      clientX: 700,
+      clientY: 250,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+
+    expect(canvas.scrollLeft).toBe(100);
+    expect(canvas.scrollTop).toBe(50);
+    expect(canvas).not.toHaveClass("panning");
+
+    // The rest of the canvas still pans, including just inside the edge band.
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      clientX: 750,
+      clientY: 300,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(canvas, {
+      clientX: 700,
+      clientY: 250,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(canvas, { pointerId: 2 });
+
+    expect(canvas.scrollLeft).toBe(150);
+    expect(canvas.scrollTop).toBe(100);
+  });
+
+  it("abandons a pan when the scroller moves natively", () => {
+    render(<LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />);
+    const canvas = screen.getByTestId("lineage-scroll");
+    mockScrollMetrics(canvas, {
+      clientWidth: 760,
+      clientHeight: 560,
+      offsetWidth: 776,
+      offsetHeight: 576,
+      scrollWidth: 1600,
+      scrollHeight: 1200,
+    });
+    canvas.scrollLeft = 0;
+    canvas.scrollTop = 0;
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+      pointerId: 1,
+    });
+    // The browser scrolled the thumb between press and first move.
+    canvas.scrollTop = 120;
+    fireEvent.pointerMove(canvas, {
+      clientX: 380,
+      clientY: 260,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+
+    expect(canvas.scrollLeft).toBe(0);
+    expect(canvas.scrollTop).toBe(120);
     expect(canvas).not.toHaveClass("panning");
   });
 

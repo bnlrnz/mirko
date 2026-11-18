@@ -66,6 +66,10 @@ const AGENDA_BAND_GAP = 104;
 const AGENDA_LABEL_MAX_SCALE = 2.2;
 // Room below the lowest rectangle for its bottom-left label at any zoom.
 const AGENDA_BOTTOM_LABEL_SPACE = 40;
+// Drag distance before a press becomes a pan, and the edge strip reserved for
+// scrollbars (classic ones take layout space, overlay ones do not).
+const PAN_THRESHOLD = 3;
+const SCROLLBAR_BAND = 18;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const DRAFT_ORDER = new Intl.Collator(undefined, {
   numeric: true,
@@ -73,6 +77,45 @@ const DRAFT_ORDER = new Intl.Collator(undefined, {
 });
 const WITHDRAWN_STATES = new Set(["withdrawn", "rejected"]);
 const NOT_TREATED_STATES = new Set(["not treated", "not-treated", "reserved"]);
+
+function scrollbarThickness(container: HTMLElement, axis: "x" | "y"): number {
+  const layout =
+    axis === "y"
+      ? container.offsetWidth -
+        container.clientWidth -
+        container.clientLeft * 2
+      : container.offsetHeight -
+        container.clientHeight -
+        container.clientTop * 2;
+  return Math.max(0, layout);
+}
+
+function isScrollbarDrag(
+  container: HTMLElement,
+  event: { clientX: number; clientY: number },
+): boolean {
+  const scrollsY = container.scrollHeight > container.clientHeight + 1;
+  const scrollsX = container.scrollWidth > container.clientWidth + 1;
+  // Overlay scrollbars float over the content and take no layout space, so
+  // reserve a fixed strip whenever that axis can actually scroll.
+  const verticalBand = scrollsY
+    ? Math.max(SCROLLBAR_BAND, scrollbarThickness(container, "y"))
+    : 0;
+  const horizontalBand = scrollsX
+    ? Math.max(SCROLLBAR_BAND, scrollbarThickness(container, "x"))
+    : 0;
+  if (verticalBand === 0 && horizontalBand === 0) {
+    return false;
+  }
+  const rect = container.getBoundingClientRect();
+  const contentRight = rect.left + container.clientLeft + container.clientWidth;
+  const contentBottom =
+    rect.top + container.clientTop + container.clientHeight;
+  return (
+    (verticalBand > 0 && event.clientX >= contentRight - verticalBand) ||
+    (horizontalBand > 0 && event.clientY >= contentBottom - horizontalBand)
+  );
+}
 
 function draftSortKey(node: LineageNode): string {
   return node.remote_mtime ?? node.first_seen_at ?? "";
@@ -1109,16 +1152,11 @@ export function LineageView({
     if (target.closest?.(".node") || target.closest?.(".edge-mail")) {
       return;
     }
-    if (!target.closest?.(".lineage-canvas")) {
-      // Empty space around the scaled canvas still pans, but a drag that
-      // starts on the native scrollbars must be left to the scroller.
-      const rect = container.getBoundingClientRect();
-      const onScrollbar =
-        event.clientX - rect.left >= container.clientWidth ||
-        event.clientY - rect.top >= container.clientHeight;
-      if (onScrollbar) {
-        return;
-      }
+    // A drag that starts on a native scrollbar belongs to the scroller. The
+    // band also covers overlay scrollbars, which sit on top of the canvas and
+    // take no layout space, so they cannot be found from clientWidth alone.
+    if (isScrollbarDrag(container, event)) {
+      return;
     }
     pan.current = {
       pointerId: event.pointerId,
@@ -1131,8 +1169,6 @@ export function LineageView({
     samples.current = [
       { time: performance.now(), x: event.clientX, y: event.clientY },
     ];
-    container.setPointerCapture?.(event.pointerId);
-    setPanning(true);
   };
 
   const movePan = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1143,11 +1179,23 @@ export function LineageView({
     }
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      state.moved = true;
-    }
     if (!state.moved) {
-      return;
+      // The browser moves a dragged scrollbar without reporting pointer moves,
+      // so a changed offset means this press was never ours to pan with.
+      if (
+        container.scrollLeft !== state.left ||
+        container.scrollTop !== state.top
+      ) {
+        pan.current = null;
+        setPanning(false);
+        return;
+      }
+      if (Math.abs(dx) <= PAN_THRESHOLD && Math.abs(dy) <= PAN_THRESHOLD) {
+        return;
+      }
+      state.moved = true;
+      container.setPointerCapture?.(event.pointerId);
+      setPanning(true);
     }
     container.scrollLeft = state.left - dx;
     container.scrollTop = state.top - dy;
@@ -1212,10 +1260,10 @@ export function LineageView({
     }
     if (state.moved) {
       startMomentum();
+      scrollRef.current?.releasePointerCapture?.(event.pointerId);
     }
     pan.current = null;
     setPanning(false);
-    scrollRef.current?.releasePointerCapture?.(event.pointerId);
   };
 
   if (lineage.nodes.length === 0) {
