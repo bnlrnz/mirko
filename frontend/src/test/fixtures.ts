@@ -257,6 +257,7 @@ export const detail: TdocDetail = {
       detail: null,
     },
   ],
+  merged_from: [],
 };
 
 export const draft: DraftDetail = {

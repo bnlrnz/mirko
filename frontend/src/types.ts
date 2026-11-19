@@ -199,6 +199,11 @@ export interface Conflict {
   assertions: Assertion[];
 }
 
+export interface MergeSource {
+  tdoc_number: string;
+  title: string | null;
+}
+
 export interface TdocDetail extends TdocSummary {
   raw_meta: unknown;
   node_status: NodeStatus | null;
@@ -207,6 +212,7 @@ export interface TdocDetail extends TdocSummary {
   notes: Note[];
   emails: MailSummary[];
   assertions: Assertion[];
+  merged_from: MergeSource[];
 }
 
 export interface DraftDetail extends Artifact {

@@ -754,8 +754,10 @@ Three-pane desktop layout, responsive enough for a narrow window.
   for the selected node.
 - **Right panel:** detail — metadata, provenance, raw HTML row, artifacts, emails,
   separate node **Action** (`Support` / `Object` / `Clarify` / **No action**), node
-  **Visibility** (**Hide** / **Show**), free-text notes, conflict actions. Actions
-  and notes are available on TDoc and draft nodes.
+  **Visibility** (**Hide** / **Show**), free-text notes, conflict actions. A node
+  that consolidates several predecessors (one baseline revision plus merged
+  contributions) lists them under **Merger of** with links to open each source.
+  Actions and notes are available on TDoc and draft nodes.
 
 ### 12.1 Lineage renderer
 

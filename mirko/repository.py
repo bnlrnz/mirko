@@ -175,6 +175,37 @@ def get_tdoc(connection: sqlite3.Connection, tdoc_number: str) -> dict | None:
             (tdoc_number,),
         )
     ]
+    # A merge target gathers several predecessors: one baseline revision and
+    # one or more merged contributions. Surface all of them so the detail panel
+    # can explain why the node exists, not just which node it replaced.
+    incoming = connection.execute(
+        "SELECT source, kind FROM edge_current WHERE target = ? "
+        "ORDER BY source, kind",
+        (tdoc_number,),
+    ).fetchall()
+    if any(row["kind"] == "merged_into" for row in incoming):
+        sources = sorted(
+            {
+                row["source"]
+                for row in incoming
+                if row["kind"] in {"revision_of", "merged_into"}
+            }
+        )
+        placeholders = ", ".join("?" for _ in sources)
+        titles = {
+            row["tdoc_number"]: row["title"]
+            for row in connection.execute(
+                f"SELECT tdoc_number, title FROM tdoc "
+                f"WHERE tdoc_number IN ({placeholders})",
+                tuple(sources),
+            )
+        }
+        data["merged_from"] = [
+            {"tdoc_number": source, "title": titles.get(source)}
+            for source in sources
+        ]
+    else:
+        data["merged_from"] = []
     return data
 
 

@@ -141,6 +141,11 @@ class AssertionSummary(BaseModel):
     detail: Any = None
 
 
+class MergeSource(BaseModel):
+    tdoc_number: str
+    title: str | None = None
+
+
 class TdocDetail(TdocSummary):
     raw_meta: Any = None
     node_status: str | None = None
@@ -149,6 +154,7 @@ class TdocDetail(TdocSummary):
     notes: list[NoteSummary] = []
     emails: list[MailSummary] = []
     assertions: list[AssertionSummary] = []
+    merged_from: list[MergeSource] = []
 
 
 class DraftDetail(ArtifactSummary):

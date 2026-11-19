@@ -226,7 +226,46 @@ def test_tdoc_detail_has_related_data(client: TestClient) -> None:
     assert len(data["emails"]) == 1
     predicates = {item["predicate"] for item in data["assertions"]}
     assert {"decision", "revision_of"} <= predicates
+    assert data["merged_from"] == []
     assert client.get("/api/tdocs/S3-999999").status_code == 404
+
+
+def test_tdoc_detail_lists_merge_sources(
+    seeded_folder: MeetingFolder, client: TestClient
+) -> None:
+    connection = seeded_folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO tdoc(tdoc_number, title) "
+            "VALUES ('S3-264205', 'Constituent CR')"
+        )
+        connection.execute(
+            "INSERT INTO assertion(subject_kind, subject_ref, predicate, "
+            "object_kind, object_ref, source, confidence, verified) VALUES "
+            "('tdoc', 'S3-264205', 'merged_into', 'tdoc', 'S3-264203', "
+            "'html', 1.0, 1)"
+        )
+        connection.execute(
+            "INSERT INTO assertion(subject_kind, subject_ref, predicate, "
+            "object_kind, object_ref, source, confidence, verified, muted) "
+            "VALUES ('tdoc', 'S3-264999', 'merged_into', 'tdoc', "
+            "'S3-264203', 'manual', 0.5, 0, 1)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    data = client.get("/api/tdocs/S3-264203").json()
+    # The baseline revision and the merged contribution both explain the
+    # merger; muted assertions stay out of the list.
+    assert [item["tdoc_number"] for item in data["merged_from"]] == [
+        "S3-264202",
+        "S3-264205",
+    ]
+    assert [item["title"] for item in data["merged_from"]] == [
+        "Original",
+        "Constituent CR",
+    ]
 
 
 def test_lineage_drops_edges_to_missing_tdocs(

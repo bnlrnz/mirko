@@ -513,6 +513,26 @@ export function DetailPanel({
         <dd>{[detail.release, detail.wi_code].filter(Boolean).join(" / ") || "—"}</dd>
       </dl>
 
+      {detail.merged_from.length > 0 ? (
+        <section>
+          <h3>Merger of</h3>
+          <ul className="merge-list">
+            {detail.merged_from.map((source) => (
+              <li key={source.tdoc_number}>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => onSelect(source.tdoc_number)}
+                >
+                  {source.tdoc_number}
+                </button>
+                <span>{value(source.title)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {detail.treated_note ? (
         <section>
           <h3>Meeting note</h3>

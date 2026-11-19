@@ -119,6 +119,8 @@ independent action and note features: a
 show a post-it badge and light yellow tint. Manual links are entered as a four-digit
 suffix after the meeting prefix and use **revised to**. Merged nodes derive their
 lane from the baseline/revised document rather than the first incoming list entry.
+Their detail panel lists every contributing predecessor under **Merger of**, with
+links to open each source TDoc.
 Clicking a draft opens a draft detail panel with its artifact metadata, action, and
 notes. Each TDoc detail links its official ZIP at `Docs/<tdoc-nr>.zip`.
 The Conflicts tab shows the competing lineage nodes side by side, with each
