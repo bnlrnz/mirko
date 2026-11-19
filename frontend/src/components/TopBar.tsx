@@ -1,16 +1,16 @@
 import type { CSSProperties } from "react";
 
 import { formatTime } from "../format";
-import type { Meeting, SyncStatus } from "../types";
+import type { ExportOptions, Meeting, SyncStatus } from "../types";
+import { ExportMenu } from "./ExportMenu";
 
 interface Props {
   meeting: Meeting | null;
   sync: SyncStatus | null;
   busy: boolean;
-  exportPath: string | null;
+  agendaItems: string[];
   onSync: () => void;
-  onExport: () => void;
-  onFinalize: () => void;
+  onExport: (options: ExportOptions) => void;
   onSettings: () => void;
   notificationPermission: NotificationPermission | "unsupported";
   onEnableNotifications: () => void;
@@ -46,10 +46,9 @@ export function TopBar({
   meeting,
   sync,
   busy,
-  exportPath,
+  agendaItems,
   onSync,
   onExport,
-  onFinalize,
   onSettings,
   notificationPermission,
   onEnableNotifications,
@@ -62,12 +61,7 @@ export function TopBar({
         {meeting ? <code>{meeting.id}</code> : null}
       </div>
       <div className="top-actions">
-        <button type="button" onClick={onExport}>
-          Export
-        </button>
-        <button type="button" onClick={onFinalize} disabled={busy}>
-          Finalize
-        </button>
+        <ExportMenu agendaItems={agendaItems} busy={busy} onExport={onExport} />
         <button type="button" onClick={onSettings}>
           Settings
         </button>
@@ -91,11 +85,6 @@ export function TopBar({
           >
             alerts blocked
           </span>
-        ) : null}
-        {exportPath ? (
-          <a className="export-link" href={`/${exportPath}`}>
-            latest export
-          </a>
         ) : null}
         <div className={`sync-chip health-${sync?.health ?? "unknown"}`}>
           <span className="sync-dot" aria-hidden="true" />

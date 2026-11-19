@@ -219,16 +219,16 @@ export interface DraftDetail extends Artifact {
   notes: Note[];
 }
 
-export interface TimelineEvent {
-  kind: string;
-  occurred_at: string | null;
-  title: string | null;
-  detail: string | null;
-  source: string | null;
-  artifact_id: number | null;
-  email_id: number | null;
-  ephemeral: boolean;
-  sequence: number;
+export interface ExportOptions {
+  scope: "tracked" | "all";
+  agendaItem: string;
+  lineage: boolean;
+  timeline: boolean;
+  artifacts: boolean;
+  notes: boolean;
+  meetingNotes: boolean;
+  state: boolean;
+  mail: boolean;
 }
 
 export interface LineageNode {

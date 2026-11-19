@@ -1596,4 +1596,128 @@ describe("LineageView", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Unknown CR")).not.toBeInTheDocument();
   });
+
+  it("shows a status chip while lineage updates or files download", () => {
+    const { rerender } = render(
+      <LineageView
+        lineage={lineage}
+        selected={null}
+        onSelect={vi.fn()}
+        updating
+      />,
+    );
+    expect(screen.getByText("Updating lineage…")).toBeInTheDocument();
+    expect(screen.queryByText("Fetching files…")).not.toBeInTheDocument();
+
+    rerender(
+      <LineageView
+        lineage={lineage}
+        selected={null}
+        onSelect={vi.fn()}
+        fetching
+      />,
+    );
+    expect(screen.getByText("Fetching files…")).toBeInTheDocument();
+    expect(screen.queryByText("Updating lineage…")).not.toBeInTheDocument();
+
+    rerender(
+      <LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />,
+    );
+    expect(screen.queryByText("Updating lineage…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fetching files…")).not.toBeInTheDocument();
+  });
+
+  it("highlights nodes and edges changed by a lineage update", () => {
+    const { rerender } = render(
+      <LineageView lineage={lineage} selected={null} onSelect={vi.fn()} />,
+    );
+    // The initial render has nothing to compare against, so nothing flashes.
+    expect(screen.getByRole("button", { name: /S3-264202/ })).not.toHaveClass(
+      "recent",
+    );
+
+    const flipped: Lineage = {
+      nodes: [
+        lineage.nodes[0],
+        { ...lineage.nodes[1], is_tracked: true },
+        { ...lineage.nodes[1], tdoc_number: "S3-264204", title: "New CR" },
+      ],
+      edges: [
+        ...lineage.edges,
+        {
+          source: "S3-264203",
+          target: "S3-264204",
+          kind: "revision_of",
+          confidence: 1,
+          verified: true,
+          source_ref: null,
+        },
+      ],
+    };
+    rerender(
+      <LineageView lineage={flipped} selected={null} onSelect={vi.fn()} />,
+    );
+
+    // The tracked flag flipped, so that node flashes.
+    expect(screen.getByRole("button", { name: /S3-264203/ })).toHaveClass(
+      "recent",
+    );
+    // New nodes and new edges flash as well.
+    expect(screen.getByRole("button", { name: /S3-264204/ })).toHaveClass(
+      "recent",
+    );
+    expect(
+      screen.getByTestId("edge-S3-264203-S3-264204"),
+    ).toHaveClass("recent");
+    // Untouched nodes stay calm.
+    expect(screen.getByRole("button", { name: /S3-264202/ })).not.toHaveClass(
+      "recent",
+    );
+  });
+
+  it("bounds column depth for cyclic dependencies", () => {
+    const base = lineage.nodes[0];
+    const chain = ["S3-264500", "S3-264501", "S3-264502"];
+    const cycle = ["S3-264510", "S3-264511", "S3-264512"];
+    const ids = [...chain, ...cycle];
+    const nodes = ids.map((id, index) => ({
+      ...base,
+      tdoc_number: id,
+      title: `Node ${index}`,
+      is_tracked: false,
+    }));
+    const link = (source: string, target: string) => ({
+      source,
+      target,
+      kind: "revision_of",
+      confidence: 1,
+      verified: true,
+      source_ref: null,
+    });
+    const edges = [
+      link(chain[0], chain[1]),
+      link(chain[1], chain[2]),
+      link(chain[2], cycle[0]),
+      link(cycle[0], cycle[1]),
+      link(cycle[1], cycle[2]),
+      link(cycle[2], cycle[0]),
+    ];
+
+    const layout = layoutLineage({ nodes, edges });
+    const depth = new Map(
+      layout.nodes.map((node) => [node.tdoc_number, node.depth]),
+    );
+
+    // Each cycle member sits at the deepest acyclic predecessor instead of
+    // drifting one column per relaxation pass.
+    expect(depth.get(cycle[0])).toBe(3);
+    expect(depth.get(cycle[1])).toBe(0);
+    expect(depth.get(cycle[2])).toBe(0);
+    for (const value of depth.values()) {
+      expect(value).toBeLessThan(nodes.length);
+    }
+    // A cycle that used to drift one column per pass would push this far
+    // beyond a handful of columns.
+    expect(layout.width).toBeLessThan(1200);
+  });
 });

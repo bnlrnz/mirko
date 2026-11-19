@@ -35,10 +35,40 @@ def _label(value: str | None) -> str:
     return text.replace("\n", "<br/>")
 
 
-def _mermaid(connection: sqlite3.Connection) -> tuple[list[str], list[str]]:
-    graph = repository.lineage(connection, include_inactive=True)
+def _filter_graph(graph: dict, agenda_item: str | None) -> dict:
+    if not agenda_item:
+        return graph
+    keep = {
+        node["tdoc_number"]
+        for node in graph["nodes"]
+        if node.get("agenda_item") == agenda_item
+    }
+    return {
+        "nodes": [n for n in graph["nodes"] if n["tdoc_number"] in keep],
+        "edges": [
+            edge
+            for edge in graph["edges"]
+            if edge["source"] in keep and edge["target"] in keep
+        ],
+    }
+
+
+def _mermaid(
+    connection: sqlite3.Connection,
+    *,
+    tracked_only: bool = False,
+    agenda_item: str | None = None,
+) -> tuple[list[str], list[str]]:
+    graph = _filter_graph(
+        repository.lineage(
+            connection, tracked_only=tracked_only, include_inactive=True
+        ),
+        agenda_item,
+    )
+    nodes = graph["nodes"]
+    edges = graph["edges"]
     lines = ["```mermaid", "graph LR"]
-    for node in graph["nodes"]:
+    for node in nodes:
         title = _label(node["title"])
         lines.append(
             f'  {_node_id(node["tdoc_number"])}["'
@@ -46,7 +76,7 @@ def _mermaid(connection: sqlite3.Connection) -> tuple[list[str], list[str]]:
         )
     inactive: list[str] = []
     muted_nodes: set[str] = set()
-    for edge in graph["edges"]:
+    for edge in edges:
         source = _node_id(edge["source"])
         target = _node_id(edge["target"])
         label = _label(edge["kind"])
@@ -74,19 +104,41 @@ def render_markdown(
     folder: MeetingFolder,
     *,
     include_mail: bool = False,
+    include_notes: bool = True,
+    include_meeting_notes: bool = True,
+    include_state: bool = True,
+    include_lineage: bool = True,
+    include_timeline: bool = True,
+    include_artifacts: bool = True,
+    tracked_only: bool = True,
+    agenda_item: str | None = None,
     generated_at: datetime | None = None,
 ) -> str:
     moment = generated_at or datetime.now(timezone.utc)
+    agenda_item = agenda_item or None
     connection = folder.connect()
     try:
         summaries = repository.list_tdocs(connection)
+        if tracked_only:
+            summaries = [item for item in summaries if item["is_tracked"]]
+        if agenda_item:
+            summaries = [
+                item
+                for item in summaries
+                if item["agenda_item"] == agenda_item
+            ]
         tracked = [item for item in summaries if item["is_tracked"]]
         state = connection.execute(
             "SELECT last_success_at, last_error FROM sync_state "
             "WHERE endpoint_id = ?",
             (folder.config.source.endpoint_id,),
         ).fetchone()
-        graph = repository.lineage(connection, include_inactive=True)
+        graph = _filter_graph(
+            repository.lineage(
+                connection, tracked_only=tracked_only, include_inactive=True
+            ),
+            agenda_item,
+        )
         lines: list[str] = []
         lines.append(f"# {folder.config.meeting.title}")
         lines.append("")
@@ -99,45 +151,58 @@ def render_markdown(
             lines.append(f"- Last sync: {state['last_success_at'] or 'never'}")
             if state["last_error"]:
                 lines.append(f"- Last sync error: {state['last_error']}")
+        scope = "tracked only" if tracked_only else "all TDocs"
+        if agenda_item:
+            scope += f", agenda {agenda_item}"
         lines.append(
-            f"- Counts: {len(summaries)} TDocs, {len(tracked)} tracked, "
-            f"{len(graph['edges'])} lineage edges"
+            f"- Counts: {len(summaries)} TDocs ({scope}), "
+            f"{len(tracked)} tracked, {len(graph['edges'])} lineage edges"
         )
         lines.append("")
 
         lines.append("## Summary")
         lines.append("")
-        lines.append(
-            "| TDoc | Agenda | Type | State | Source | Notes | Tracked |"
-        )
-        lines.append("|---|---|---|---|---|---|---|")
+        columns = ["TDoc", "Agenda", "Type"]
+        if include_state:
+            columns.append("State")
+        columns.append("Source")
+        if include_notes:
+            columns.append("Notes")
+        columns.append("Tracked")
+        lines.append("| " + " | ".join(columns) + " |")
+        lines.append("|" + "---|" * len(columns))
         for item in summaries:
-            lines.append(
-                "| {tdoc} | {agenda} | {type} | {state} | {source} | "
-                "{notes} | {tracked} |".format(
-                    tdoc=_cell(item["tdoc_number"]),
-                    agenda=_cell(item["agenda_item"]),
-                    type=_cell(item["type"]),
-                    state=_cell(item["decision"]),
-                    source=_cell(item["source"]),
-                    notes=item["notes_count"],
-                    tracked="yes" if item["is_tracked"] else "no",
-                )
+            cells = [
+                _cell(item["tdoc_number"]),
+                _cell(item["agenda_item"]),
+                _cell(item["type"]),
+            ]
+            if include_state:
+                cells.append(_cell(item["decision"]))
+            cells.append(_cell(item["source"]))
+            if include_notes:
+                cells.append(str(item["notes_count"]))
+            cells.append("yes" if item["is_tracked"] else "no")
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+        if include_lineage:
+            lines.append("## Lineage")
+            lines.append("")
+            mermaid_lines, inactive = _mermaid(
+                connection,
+                tracked_only=tracked_only,
+                agenda_item=agenda_item,
             )
-        lines.append("")
-
-        lines.append("## Lineage")
-        lines.append("")
-        mermaid_lines, inactive = _mermaid(connection)
-        lines.extend(mermaid_lines)
-        lines.append("")
-        if inactive:
-            lines.append("Muted / inactive branches:")
+            lines.extend(mermaid_lines)
             lines.append("")
-            lines.extend(inactive)
-            lines.append("")
+            if inactive:
+                lines.append("Muted / inactive branches:")
+                lines.append("")
+                lines.extend(inactive)
+                lines.append("")
 
-        for summary in tracked:
+        for summary in summaries:
             detail = repository.get_tdoc(connection, summary["tdoc_number"])
             if detail is None:
                 continue
@@ -148,54 +213,62 @@ def render_markdown(
                 lines.append("")
             lines.append(f"- Agenda: {_cell(detail['agenda_item'])}")
             lines.append(f"- Type: {_cell(detail['type'])}")
-            lines.append(f"- State: {_cell(detail['decision'])}")
-            if detail["node_status"]:
-                lines.append(f"- Status: {_cell(detail['node_status'])}")
+            if include_state:
+                lines.append(f"- State: {_cell(detail['decision'])}")
+                if detail["node_status"]:
+                    lines.append(f"- Status: {_cell(detail['node_status'])}")
             lines.append(f"- Source: {_cell(detail['source'])}")
             lines.append(f"- For: {_cell(detail['for_action'])}")
             lines.append(
                 f"- Release / WI: {_cell(detail['release'])} / "
                 f"{_cell(detail['wi_code'])}"
             )
-            if detail["treated_note"]:
+            if include_meeting_notes and detail["treated_note"]:
                 lines.append(f"- Meeting note: {_cell(detail['treated_note'])}")
             lines.append("")
 
-            lines.append("### Timeline")
-            lines.append("")
-            events = repository.timeline(connection, detail["tdoc_number"])
-            if not events:
-                lines.append("_No events._")
-            for event in events:
-                when = event.get("occurred_at") or "unknown"
-                suffix = " _(ephemeral)_" if event.get("ephemeral") else ""
-                detail_text = event.get("detail")
-                extra = f" — {detail_text}" if detail_text else ""
-                lines.append(
-                    f"- {when} · {event.get('kind')}: "
-                    f"{event.get('title') or ''}{extra}{suffix}"
-                )
-            lines.append("")
+            if include_timeline:
+                lines.append("### Timeline")
+                lines.append("")
+                events = repository.timeline(connection, detail["tdoc_number"])
+                if not events:
+                    lines.append("_No events._")
+                for event in events:
+                    when = event.get("occurred_at") or "unknown"
+                    suffix = (
+                        " _(ephemeral)_" if event.get("ephemeral") else ""
+                    )
+                    detail_text = event.get("detail")
+                    extra = f" — {detail_text}" if detail_text else ""
+                    lines.append(
+                        f"- {when} · {event.get('kind')}: "
+                        f"{event.get('title') or ''}{extra}{suffix}"
+                    )
+                lines.append("")
 
-            lines.append("### Artifacts")
-            lines.append("")
-            if not detail["artifacts"]:
-                lines.append("_No cached artifacts._")
-            for artifact in detail["artifacts"]:
-                suffix = " _(ephemeral)_" if artifact["is_ephemeral"] else ""
-                lines.append(
-                    f"- `{artifact['logical_path']}` "
-                    f"({artifact['kind']}, {artifact['status']}){suffix}"
-                )
-            lines.append("")
+            if include_artifacts:
+                lines.append("### Artifacts")
+                lines.append("")
+                if not detail["artifacts"]:
+                    lines.append("_No cached artifacts._")
+                for artifact in detail["artifacts"]:
+                    suffix = (
+                        " _(ephemeral)_" if artifact["is_ephemeral"] else ""
+                    )
+                    lines.append(
+                        f"- `{artifact['logical_path']}` "
+                        f"({artifact['kind']}, {artifact['status']}){suffix}"
+                    )
+                lines.append("")
 
-            lines.append("### Notes")
-            lines.append("")
-            if not detail["notes"]:
-                lines.append("_No notes._")
-            for note in detail["notes"]:
-                lines.append(f"- {note['body']}")
-            lines.append("")
+            if include_notes:
+                lines.append("### Notes")
+                lines.append("")
+                if not detail["notes"]:
+                    lines.append("_No notes._")
+                for note in detail["notes"]:
+                    lines.append(f"- {note['body']}")
+                lines.append("")
 
             if include_mail:
                 lines.append("### Mail")
@@ -219,6 +292,14 @@ def export_markdown(
     folder: MeetingFolder,
     *,
     include_mail: bool = False,
+    include_notes: bool = True,
+    include_meeting_notes: bool = True,
+    include_state: bool = True,
+    include_lineage: bool = True,
+    include_timeline: bool = True,
+    include_artifacts: bool = True,
+    tracked_only: bool = True,
+    agenda_item: str | None = None,
     generated_at: datetime | None = None,
 ) -> Path:
     moment = generated_at or datetime.now(timezone.utc)
@@ -232,7 +313,17 @@ def export_markdown(
     target = folder.exports_dir / f"mirko-{slug}-{stamp}.md"
     target.write_text(
         render_markdown(
-            folder, include_mail=include_mail, generated_at=moment
+            folder,
+            include_mail=include_mail,
+            include_notes=include_notes,
+            include_meeting_notes=include_meeting_notes,
+            include_state=include_state,
+            include_lineage=include_lineage,
+            include_timeline=include_timeline,
+            include_artifacts=include_artifacts,
+            tracked_only=tracked_only,
+            agenda_item=agenda_item,
+            generated_at=moment,
         ),
         encoding="utf-8",
     )
@@ -305,7 +396,10 @@ def finalize(
     moment = clock()
     _reingest_latest_agenda(folder, clock=clock)
     target = export_markdown(
-        folder, include_mail=include_mail, generated_at=moment
+        folder,
+        include_mail=include_mail,
+        tracked_only=False,
+        generated_at=moment,
     )
     linked = materialize_mirror(folder) if mirror else 0
     connection = folder.connect()

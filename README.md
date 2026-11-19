@@ -74,7 +74,7 @@ atomically to
 ## Frontend
 
 React + TypeScript + Vite. Three panes: a compact tracked-favourites rail, a
-center view (Lineage, Timeline, Conflicts, Notifications, Log), and a detail panel
+center view (Lineage, Conflicts, Notifications, Log), and a detail panel
 with metadata, artifacts, mail, notes, assertions, manual links, and conflict
 actions. The rail lists only tracked TDocs, each with a star and an unread marker
 for draft, file, merge, revision, link, or status updates; double-clicking a
@@ -127,6 +127,11 @@ Newly arrived files glow in the lineage graph; **Enable alerts** requests browse
 notification permission and raises a desktop notification for each new document.
 Deferred artifacts show as `not fetched` with a fetch button and their FTP upload
 timestamp; selecting a TDoc or tracking it triggers the download automatically.
+Tracking paints the new tracked flags immediately and downloads deferred files in
+the background, so a slow FTP fetch never blocks the graph. While that happens the
+lineage toolbar shows **Updating lineage…** and **Fetching files…**, and nodes or
+edges changed by the update flash briefly so the new part of the graph is easy to
+spot.
 
 ```sh
 cd frontend
@@ -136,16 +141,26 @@ npm run build         # tsc --noEmit && vite build
 nix develop .. -c npm run e2e   # Playwright smoke (browser provided by the flake)
 ```
 
-## Export vs. finalize
+## Export
 
-- **Export** (`GET /api/export/markdown`) — read-only snapshot of the current
-  database state as Markdown, streamed as a download. Writes nothing and can be
-  repeated at any time.
-- **Finalize** (`POST /api/finalize`) — end-of-meeting workflow: re-ingests the
-  latest agenda, writes a timestamped file under `exports/`, materializes
-  `cache/mirror/`, and records `finalized`, `finalized_at`, and `export_path` in
-  `meeting_meta`. It is a flag, not a lock: syncing, annotation, and re-finalizing
-  remain allowed.
+**Export** (`GET /api/export/markdown`) is a read-only snapshot of the current
+database state as Markdown, streamed as a download. It writes nothing and can be
+repeated at any time. The **Export** button in the top bar opens an options menu:
+
+- **Scope** — tracked TDocs only (default) or all TDocs.
+- **Agenda item** — restrict the export to one agenda section.
+- **Include** — lineage graph, timeline, artifacts, notes, meeting notes, and
+  state are on by default; mail is off by default.
+
+The same settings are available as query parameters: `tracked_only`,
+`agenda_item`, `include_lineage`, `include_timeline`, `include_artifacts`,
+`include_notes`, `include_meeting_notes`, `include_state`, and `include_mail`.
+
+**Finalize** (`POST /api/finalize`) is the end-of-meeting workflow and has no UI
+button: it re-ingests the latest agenda, writes a whole-meeting timestamped file
+under `exports/`, materializes `cache/mirror/`, and records `finalized`,
+`finalized_at`, and `export_path` in `meeting_meta`. It is a flag, not a lock:
+syncing, annotation, and re-finalizing remain allowed.
 
 ## API surface
 

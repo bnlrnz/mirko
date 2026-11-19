@@ -10,7 +10,6 @@ import type {
   SyncStatus,
   TdocDetail,
   TdocSummary,
-  TimelineEvent,
   UserAction,
 } from "../types";
 
@@ -270,43 +269,6 @@ export const draft: DraftDetail = {
   is_hidden: false,
   notes: [],
 };
-
-export const timeline: TimelineEvent[] = [
-  {
-    kind: "discovered",
-    occurred_at: "2026-10-16T10:00:00.000000Z",
-    title: "S3-264202 first seen",
-    detail: null,
-    source: "html",
-    artifact_id: null,
-    email_id: null,
-    ephemeral: false,
-    sequence: 0,
-  },
-  {
-    kind: "artifact",
-    occurred_at: "2026-10-16T10:30:00.000000Z",
-    title: "draft S3-264202-r1.docx",
-    detail: "created",
-    source: "working_draft",
-    artifact_id: 1,
-    email_id: null,
-    ephemeral: true,
-    sequence: 1,
-  },
-  {
-    kind: "email",
-    occurred_at: "2026-10-16T12:00:00.000000Z",
-    title: "[SA3#130][S3-264202] CR on QUIC",
-    detail: "Alice (scope=subject)",
-    source: "email",
-    artifact_id: null,
-    email_id: 1,
-    ephemeral: false,
-    sequence: 2,
-  },
-];
-
 
 export const notifications: NotificationItem[] = [
   {

@@ -10,10 +10,9 @@ function renderTopBar(barColor: string) {
       meeting={{ ...meeting, bar_color: barColor }}
       sync={null}
       busy={false}
-      exportPath={null}
+      agendaItems={["5.3.1.3"]}
       onSync={vi.fn()}
       onExport={vi.fn()}
-      onFinalize={vi.fn()}
       onSettings={vi.fn()}
       notificationPermission="unsupported"
       onEnableNotifications={vi.fn()}

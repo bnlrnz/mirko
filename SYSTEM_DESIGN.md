@@ -28,7 +28,7 @@ process re-implementation.
 - Filename heuristics for `Drafts/` (hints only, never authoritative).
 - Mail ingestion from a local `mbox` file or directory (including Thunderbird
   `.sbd` subfolders), `.eml` file, or `EML` directory (no IMAP/POP client).
-- Lineage graph + per-TDoc timeline, filters, detail view.
+- Lineage graph, filters, detail view.
 - User-managed node statuses and notes, manual lineage assertions, conflict repair.
 - Whole-meeting Markdown export.
 - Ephemeral-safe local cache, single-download policy, OS-default file opening.
@@ -614,7 +614,7 @@ Clicking an artifact opens the cached blob with the OS default application:
 ### 9.3 Ephemeral artifacts
 
 Working drafts are flagged `ephemeral=1`. They remain cached after the meeting
-(the only surviving copy), are included in the timeline and export, and can be
+(the only surviving copy), are included in the export, and can be
 filtered out of "official only" views.
 
 ### 9.4 Finalize and archive
@@ -694,7 +694,9 @@ Read:
 - `GET /api/log?limit=100`
 - `GET /api/conflicts`
 - `GET /api/sync/status`
-- `GET /api/export/markdown?include_mail=false`
+- `GET /api/export/markdown?tracked_only=true&agenda_item=&include_lineage=true&
+  include_timeline=true&include_artifacts=true&include_notes=true&
+  include_meeting_notes=true&include_state=true&include_mail=false`
 - `GET /api/events` (SSE; sync/graph/conflict events)
 
 Write:
@@ -725,9 +727,10 @@ Three-pane desktop layout, responsive enough for a narrow window.
 
 - **Top bar:** meeting selector, Sync Now, sync chip (interval/last/next/health),
   Settings panel (FTP source, mail source, automatic updates and intervals,
-  lazy drafts, meeting-bar color, workbook upload), and an **Enable alerts**
-  control for browser notifications. The bar color defaults to `#ffffff` and fades
-  from left to right into white.
+  lazy drafts, meeting-bar color, workbook upload), an **Export** menu (tracked
+  only or all TDocs, agenda item, and which sections to include), and an
+  **Enable alerts** control for browser notifications. The bar color defaults to
+  `#ffffff` and fades from left to right into white.
 - **Left rail:** compact tracked-favourites list only; a per-row tracking star and
   unread draft/file/merge/revision/link/status markers; double-click centers the
   node in Lineage.
@@ -735,7 +738,7 @@ Three-pane desktop layout, responsive enough for a narrow window.
   type, state, source, tracked only, **Include Drafts**, **Hide withdrawn**,
   **Hide not treated**, **Hide unknown**, **Show hidden**) or a sortable table
   (default for prep). Tabs:
-  **Lineage**, **Timeline**, **Conflicts**, **Notifications**, **Log**. The **+**
+  **Lineage**, **Conflicts**, **Notifications**, **Log**. The **+**
   control creates additional, independent lineage tabs; each tab keeps its own
   filter selection, can be renamed through its pencil control or by double-clicking
   its label, and can be closed (except the last one). Agenda, type, state, and
@@ -766,6 +769,17 @@ Custom SVG lane renderer, not a graph library:
   node exists) and can raise a browser desktop notification;
 - every lineage tab renders from the same loaded graph but applies its own filter
   set independently, so switching tabs never changes another tab's view;
+- layout is a single Kahn pass over the dependency graph (O(V+E)) to assign
+  columns by longest path; nodes that only sit inside a cycle keep the depth of
+  their deepest acyclic predecessor, so a cyclic graph cannot grow a new column
+  per relaxation pass. Draft chaining and graph updates use maps and sets instead
+  of repeated array scans, keeping large graphs responsive while tracking;
+- identical poll results keep the previous graph object and the renderer is
+  memoized, so the 5 s refresh does not re-layout an unchanged graph;
+- tracking updates the tracked flags and lineage before deferred files download;
+  the toolbar shows **Updating lineage…** / **Fetching files…** during the
+  process, and nodes whose tracked flag flipped plus any new nodes or edges flash
+  briefly (suppressed under `prefers-reduced-motion`);
 - `revision_of` = straight continuation; `merged_into` = curved convergence whose
   lane follows the baseline/revised predecessor rather than the first incoming
   list entry; `has_draft` = dotted child edge; `based_on` = dashed weak/inferred
@@ -792,16 +806,9 @@ Custom SVG lane renderer, not a graph library:
   directions with inertia (a click or mouse wheel stops the fling immediately);
   scrollbars keep their native behavior; nodes remain clickable;
   zoom controls; double-clicking a TDoc in the left list centers the graph on its
-  node; double-clicking a lineage node toggles tracking; keyboard navigation;
-- timeline pane synchronized by selection.
+  node; double-clicking a lineage node toggles tracking; keyboard navigation.
 
-### 12.2 Timeline
-
-Per TDoc, chronological events: initial artifact, working drafts (with revision),
-emails, Inbox ZIP, state notes, user notes, state transitions. Ephemeral events are
-visually distinct.
-
-### 12.3 Interaction rules
+### 12.2 Interaction rules
 
 - Adding a tracked TDoc is instant and local; tracking expands to every existing
   TDoc in the active lineage component, while untracking removes only the selected
@@ -826,21 +833,32 @@ visually distinct.
 
 ## 13. Markdown export
 
-One file per export: `exports/mirko-<meeting>-<timestamp>.md`, covering the **whole
-meeting** (not a JSON sidecar in v1).
+Two entry points share one renderer:
+
+- `GET /api/export/markdown` streams a snapshot (writes nothing) using the same
+  options as the UI's **Export** menu.
+- `POST /api/finalize` writes a whole-meeting file
+  `exports/mirko-<meeting>-<timestamp>.md` (all TDocs, all sections).
+
+Options: `tracked_only` (default true), `agenda_item`, and per-section switches
+`include_lineage`, `include_timeline`, `include_artifacts`, `include_notes`,
+`include_meeting_notes`, `include_state` (all default true) plus `include_mail`
+(default false). "Meeting notes" is the agenda's treated-note text; "state"
+covers the state column/line and the node status line.
 
 Contents:
 
-1. Header: meeting, generated-at, endpoint, freshness, counts.
-2. Summary table: TDoc, agenda, type, state, source, notes count, tracked.
-3. Per tracked TDoc: metadata, state, lineage (`revision_of` / `merged_into`),
-   full event timeline, status, notes, optional mails.
+1. Header: meeting, generated-at, endpoint, freshness, counts and scope.
+2. Summary table: TDoc, agenda, type, state, source, notes count, tracked
+   (state and notes columns follow the options).
+3. Per TDoc: metadata, state, meeting note, status, event timeline, artifacts,
+   notes, optional mails — each section only when enabled.
 4. A Mermaid `graph LR` lineage diagram.
 5. Muted/inactive branches listed and marked; never omitted silently.
 6. Ephemeral artifacts marked as such.
 
-`include_mail` is a toggle. Export is deterministic for a given DB state (stable
-ordering) so it can be snapshot-tested.
+Export is deterministic for a given DB state (stable ordering) so it can be
+snapshot-tested.
 
 ---
 

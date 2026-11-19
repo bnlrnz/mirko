@@ -162,8 +162,9 @@ def test_render_markdown_is_deterministic(tmp_path: Path) -> None:
 
     assert first.startswith("# SA3#130 Prague")
     assert "Generated: 2026-10-16T15:00:00Z" in first
+    assert "- Counts: 1 TDocs (tracked only), 1 tracked" in first
     assert "| S3-264202 | 5.3.1.3 | CR | revised | Huawei | 1 | yes |" in first
-    assert "| S3-264203 | 5.3.1.3 | CR | agreed | Huawei | 0 | no |" in first
+    assert "| S3-264203 |" not in first
     assert "## S3-264202" in first
     assert "```mermaid" in first
     assert "graph LR" in first
@@ -173,6 +174,12 @@ def test_render_markdown_is_deterministic(tmp_path: Path) -> None:
     assert "draft S3-264202-r1.docx" in first
     assert "_(ephemeral)_" in first
     assert "### Mail" not in first
+
+    everything = render_markdown(folder, tracked_only=False, generated_at=NOW)
+    assert "- Counts: 2 TDocs (all TDocs), 1 tracked" in everything
+    assert "| S3-264202 | 5.3.1.3 | CR | revised | Huawei | 1 | yes |" in everything
+    assert "| S3-264203 | 5.3.1.3 | CR | agreed | Huawei | 0 | no |" in everything
+    assert "## S3-264203" in everything
 
     with_mail = render_markdown(folder, include_mail=True, generated_at=NOW)
     assert "### Mail" in with_mail
@@ -195,6 +202,83 @@ def test_render_lists_inactive_branches(tmp_path: Path) -> None:
     rendered = render_markdown(folder, generated_at=NOW)
     assert "Muted / inactive branches" in rendered
     assert "S3-264203 → S3-264202 (merged_into, inactive hint)" in rendered
+
+
+def test_render_markdown_content_options(tmp_path: Path) -> None:
+    folder = seeded_folder(tmp_path)
+    connection = folder.connect()
+    try:
+        connection.execute(
+            "UPDATE tdoc SET treated_note = 'Discussed in session.' "
+            "WHERE tdoc_number = 'S3-264202'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    full = render_markdown(folder, generated_at=NOW)
+    assert "## Summary" in full
+    assert "| TDoc | Agenda | Type | State | Source | Notes | Tracked |" in full
+    assert "## Lineage" in full
+    assert "### Timeline" in full
+    assert "### Artifacts" in full
+    assert "### Notes" in full
+    assert "- State: revised" in full
+    assert "- Status: Support" in full
+    assert "- Meeting note: Discussed in session." in full
+
+    bare = render_markdown(
+        folder,
+        include_lineage=False,
+        include_timeline=False,
+        include_artifacts=False,
+        include_notes=False,
+        include_meeting_notes=False,
+        include_state=False,
+        generated_at=NOW,
+    )
+    assert "| TDoc | Agenda | Type | Source | Tracked |" in bare
+    assert "## Lineage" not in bare
+    assert "```mermaid" not in bare
+    assert "### Timeline" not in bare
+    assert "### Artifacts" not in bare
+    assert "### Notes" not in bare
+    assert "- State:" not in bare
+    assert "- Status:" not in bare
+    assert "Meeting note:" not in bare
+    assert "- Support this CR." not in bare
+
+
+def test_render_markdown_agenda_item_filter(tmp_path: Path) -> None:
+    folder = seeded_folder(tmp_path)
+    connection = folder.connect()
+    try:
+        connection.execute(
+            "INSERT INTO tdoc(tdoc_number, agenda_item, title, source, type) "
+            "VALUES ('S3-264204', '6.1', 'Other CR', 'Nokia', 'CR')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    everything = render_markdown(folder, tracked_only=False, generated_at=NOW)
+    assert "## S3-264204" in everything
+    assert "S3-264204" in everything.split("```mermaid")[1].split("```")[0]
+
+    filtered = render_markdown(
+        folder, tracked_only=False, agenda_item="5.3.1.3", generated_at=NOW
+    )
+    assert "## S3-264202" in filtered
+    assert "## S3-264203" in filtered
+    assert "## S3-264204" not in filtered
+    assert "S3-264204" not in filtered.split("```mermaid")[1].split("```")[0]
+    assert "- Counts: 2 TDocs (all TDocs, agenda 5.3.1.3)" in filtered
+
+    empty = render_markdown(
+        folder, tracked_only=False, agenda_item="9.9.9", generated_at=NOW
+    )
+    assert "- Counts: 0 TDocs (all TDocs, agenda 9.9.9)" in empty
+    assert "## S3-264202" not in empty
 
 
 def test_finalize_writes_export_mirror_and_flag(tmp_path: Path) -> None:
@@ -232,9 +316,39 @@ def test_export_api_and_finalize_endpoint(tmp_path: Path) -> None:
     assert exported.headers["content-type"].startswith("text/markdown")
     assert "attachment" in exported.headers["content-disposition"]
     assert "# SA3#130 Prague" in exported.text
+    assert "tracked only" in exported.text
+    assert "## S3-264203" not in exported.text
+
+    everything = client.get("/api/export/markdown?tracked_only=false")
+    assert everything.status_code == 200
+    assert "## S3-264203" in everything.text
+
+    bare = client.get(
+        "/api/export/markdown"
+        "?tracked_only=false"
+        "&include_lineage=false"
+        "&include_timeline=false"
+        "&include_artifacts=false"
+        "&include_notes=false"
+        "&include_meeting_notes=false"
+        "&include_state=false"
+        "&include_mail=true"
+    )
+    assert bare.status_code == 200
+    assert "## Lineage" not in bare.text
+    assert "### Timeline" not in bare.text
+    assert "### Artifacts" not in bare.text
+    assert "### Notes" not in bare.text
+    assert "- State:" not in bare.text
+    assert "### Mail" in bare.text
+
+    scoped = client.get("/api/export/markdown?agenda_item=9.9.9")
+    assert scoped.status_code == 200
+    assert "- Counts: 0 TDocs" in scoped.text
 
     finalized = client.post("/api/finalize")
     assert finalized.status_code == 200
     payload = finalized.json()
     assert payload["status"] == "finalized"
     assert (folder.path / payload["export_path"]).is_file()
+    assert "## S3-264203" in (folder.path / payload["export_path"]).read_text()

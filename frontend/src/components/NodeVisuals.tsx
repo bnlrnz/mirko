@@ -170,12 +170,14 @@ export function LineageNodeGlyph({
   onClick,
   onDoubleClick,
   onKeyDown,
+  recent = false,
 }: {
   node: LineageNode;
   x?: number;
   y?: number;
   selected?: boolean;
   newFile?: boolean;
+  recent?: boolean;
   ariaLabel?: string;
   onClick?: () => void;
   onDoubleClick?: () => void;
@@ -193,7 +195,9 @@ export function LineageNodeGlyph({
         node.node_kind === "draft" ? "draft" : ""
       } ${newFile ? "new-file" : ""} ${
         node.is_hidden ? "manually-hidden" : ""
-      } ${nodeTintClass(node)} ${selected ? "selected" : ""}`}
+      } ${nodeTintClass(node)} ${selected ? "selected" : ""} ${
+        recent ? "recent" : ""
+      }`}
       transform={`translate(${x}, ${y})`}
       onClick={onClick}
       onDoubleClick={onDoubleClick}

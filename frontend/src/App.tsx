@@ -20,6 +20,7 @@ import type {
   Conflict,
   ConflictResolution,
   DraftDetail,
+  ExportOptions,
   Filters,
   Lineage,
   LineageTab,
@@ -31,7 +32,6 @@ import type {
   SyncStatus,
   TdocDetail,
   TdocSummary,
-  TimelineEvent,
   UserAction,
 } from "./types";
 
@@ -79,6 +79,21 @@ function mergeSeenNotifications(
   return next ?? current;
 }
 
+// A poll can return an identical graph with fresh object identities. Keeping
+// the previous object lets memoized children skip a full layout and SVG diff.
+function sameLineage(left: Lineage, right: Lineage): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (
+    left.nodes.length !== right.nodes.length ||
+    left.edges.length !== right.edges.length
+  ) {
+    return false;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export default function App() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [tdocs, setTdocs] = useState<TdocSummary[]>([]);
@@ -98,7 +113,6 @@ export default function App() {
     null,
   );
   const [detail, setDetail] = useState<TdocDetail | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [lineage, setLineage] = useState<Lineage>({ nodes: [], edges: [] });
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [seenNotifications, setSeenNotifications] = useState<
@@ -114,11 +128,12 @@ export default function App() {
   const [tab, setTab] = useState<CenterTab>(lineageTabKey("lineage-1"));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [exportPath, setExportPath] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [lineageBusy, setLineageBusy] = useState(0);
+  const [fetchingFiles, setFetchingFiles] = useState(0);
   const fetched = useRef(new Set<string>());
   const staticRequest = useRef(0);
   const lastSyncMarker = useRef<string | null>(null);
@@ -315,7 +330,9 @@ export default function App() {
         return;
       }
       setMeeting(meetingData);
-      setLineage(lineageData);
+      setLineage((current) =>
+        sameLineage(current, lineageData) ? current : lineageData,
+      );
       notificationsRef.current = notificationData;
       setNotifications(notificationData);
       setSeenNotifications((current) =>
@@ -409,15 +426,14 @@ export default function App() {
   useEffect(() => {
     if (!selected) {
       setDetail(null);
-      setTimeline([]);
       return;
     }
     let cancelled = false;
-    Promise.all([api.tdoc(selected), api.timeline(selected)])
-      .then(([detailData, events]) => {
+    api
+      .tdoc(selected)
+      .then((detailData) => {
         if (!cancelled) {
           setDetail(detailData);
-          setTimeline(events);
         }
       })
       .catch((caught: unknown) => {
@@ -457,12 +473,7 @@ export default function App() {
     if (!selected) {
       return;
     }
-    const [detailData, events] = await Promise.all([
-      api.tdoc(selected),
-      api.timeline(selected),
-    ]);
-    setDetail(detailData);
-    setTimeline(events);
+    setDetail(await api.tdoc(selected));
   }, [selected]);
 
   const refreshDraft = useCallback(async () => {
@@ -522,41 +533,48 @@ export default function App() {
     }
   }, [refreshStatic, refreshTdocs]);
 
-  const onExport = useCallback(() => {
-    window.open("/api/export/markdown", "_blank", "noopener");
+  const onExport = useCallback((options: ExportOptions) => {
+    window.open(api.exportMarkdownUrl(options), "_blank", "noopener");
   }, []);
-
-  const onFinalize = useCallback(async () => {
-    setBusy(true);
-    try {
-      const result = await api.finalize();
-      setExportPath(result.export_path);
-      await refreshStatic();
-      setError(null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBusy(false);
-    }
-  }, [refreshStatic]);
 
   const onTrack = useCallback(
     async (tdoc: string, tracked: boolean) => {
+      setLineageBusy((count) => count + 1);
       try {
         await api.track(tdoc, tracked);
-        if (tracked) {
-          fetched.current.delete(tdoc);
-          const result = await api.fetchTdoc(tdoc, true);
-          if (result.failures.length > 0) {
-            setError(result.failures.join("; "));
-          }
-        }
+        // Paint the new tracked flags first; missing files download afterwards
+        // so a slow FTP fetch never freezes the graph update.
         await Promise.all([refreshTdocs(), refreshStatic()]);
         if (selected === tdoc) {
           await refreshDetail();
         }
+        if (tracked) {
+          fetched.current.delete(tdoc);
+          setFetchingFiles((count) => count + 1);
+          void api
+            .fetchTdoc(tdoc, true)
+            .then(async (result) => {
+              if (result.failures.length > 0) {
+                setError(result.failures.join("; "));
+              }
+              await Promise.all([refreshTdocs(), refreshStatic()]);
+              if (selected === tdoc) {
+                await refreshDetail();
+              }
+            })
+            .catch((caught: unknown) => {
+              setError(
+                caught instanceof Error ? caught.message : String(caught),
+              );
+            })
+            .finally(() =>
+              setFetchingFiles((count) => Math.max(0, count - 1)),
+            );
+        }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setLineageBusy((count) => Math.max(0, count - 1));
       }
     },
     [refreshDetail, refreshStatic, refreshTdocs, selected],
@@ -575,7 +593,6 @@ export default function App() {
         });
         if (target.kind === "tdoc") {
           setDetail(await api.tdoc(target.ref));
-          setTimeline(await api.timeline(target.ref));
         } else {
           setDraft(await api.draft(Number(target.ref)));
         }
@@ -783,6 +800,18 @@ export default function App() {
       ),
     [notifications, seenNotifications],
   );
+  const agendaItems = useMemo(() => {
+    const items = new Set<string>();
+    for (const node of lineage.nodes) {
+      const agenda = node.agenda_item?.trim();
+      if (agenda) {
+        items.add(agenda);
+      }
+    }
+    return Array.from(items).sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }),
+    );
+  }, [lineage.nodes]);
   const newArtifactPaths = useMemo(
     () => new Set(newArtifacts.map((item) => item.ref)),
     [newArtifacts],
@@ -798,10 +827,9 @@ export default function App() {
         meeting={meeting}
         sync={sync}
         busy={busy}
-        exportPath={exportPath}
+        agendaItems={agendaItems}
         onSync={onSync}
         onExport={onExport}
-        onFinalize={onFinalize}
         onSettings={onSettings}
         notificationPermission={notificationPermission}
         onEnableNotifications={() => void enableNotifications()}
@@ -830,7 +858,6 @@ export default function App() {
           onRenameLineageTab={onRenameLineageTab}
           onLineageFilters={onLineageFilters}
           lineage={lineage}
-          timeline={timeline}
           notifications={notifications}
           unreadNotificationCount={unreadNotificationCount}
           seenNotifications={seenNotifications}
@@ -846,6 +873,8 @@ export default function App() {
           newArtifactTdocs={newArtifactTdocs}
           onResolve={onResolveConflict}
           onTrack={onTrack}
+          updating={lineageBusy > 0}
+          fetching={fetchingFiles > 0}
         />
         <DetailPanel
           detail={detail}

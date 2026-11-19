@@ -4,6 +4,7 @@ import type {
   ConflictResolution,
   DraftDetail,
   ExcelImportResult,
+  ExportOptions,
   FetchResult,
   Lineage,
   LineageViews,
@@ -18,7 +19,6 @@ import type {
   SyncStatus,
   TdocDetail,
   TdocSummary,
-  TimelineEvent,
   UserAction,
 } from "./types";
 
@@ -53,10 +53,6 @@ export const api = {
     request<TdocDetail>(`/api/tdocs/${encodeURIComponent(tdoc)}`),
   draft: (artifactId: number) =>
     request<DraftDetail>(`/api/drafts/${artifactId}`),
-  timeline: (tdoc: string) =>
-    request<TimelineEvent[]>(
-      `/api/tdocs/${encodeURIComponent(tdoc)}/timeline`,
-    ),
   lineage: (
     trackedOnly: boolean,
     includeInactive = false,
@@ -161,6 +157,18 @@ export const api = {
       `/api/tdocs/${encodeURIComponent(tdoc)}/track`,
       { method: tracked ? "POST" : "DELETE" },
     ),
+  exportMarkdownUrl: (options: ExportOptions) =>
+    `/api/export/markdown${query({
+      tracked_only: options.scope !== "all",
+      agenda_item: options.agendaItem,
+      include_lineage: options.lineage,
+      include_timeline: options.timeline,
+      include_artifacts: options.artifacts,
+      include_notes: options.notes,
+      include_meeting_notes: options.meetingNotes,
+      include_state: options.state,
+      include_mail: options.mail,
+    })}`,
   addNote: (body: {
     target_kind: string;
     target_ref: string;
@@ -197,8 +205,4 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
-  finalize: () =>
-    request<{ status: string; export_path: string }>("/api/finalize", {
-      method: "POST",
-    }),
 };

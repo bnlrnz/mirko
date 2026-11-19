@@ -13,7 +13,6 @@ import {
   settings,
   sync,
   tdocs,
-  timeline,
   userActions,
 } from "./test/fixtures";
 
@@ -129,16 +128,16 @@ function installFetch() {
       }
       if (url === "/api/sync/status") return json(sync);
       if (url === "/api/sync") return json({ status: "ok" });
-      if (url === "/api/finalize") {
-        return json({
-          status: "finalized",
-          export_path: "exports/mirko-SA3-130-20261016T150000Z.md",
-          mirror_links: 1,
-          finalized_at: "2026-10-16T15:00:00Z",
-        });
-      }
       if (url === "/api/tdocs?tracked=true") {
         return json(tdocs.filter((item) => item.is_tracked));
+      }
+      if (url.endsWith("/fetch")) {
+        return json({
+          tdoc_number: "S3-264202",
+          fetched: 0,
+          artifacts: [],
+          failures: [],
+        });
       }
       if (url === "/api/tdocs") return json(tdocs);
       if (url === "/api/drafts/1") return json(draft);
@@ -152,11 +151,9 @@ function installFetch() {
           is_tracked: false,
         });
       }
-      if (url === "/api/tdocs/S3-264203/timeline") return json(timeline);
       if (url === "/api/tdocs/S3-264202") {
         return json({ ...detail, is_hidden: nodeHidden });
       }
-      if (url === "/api/tdocs/S3-264202/timeline") return json(timeline);
       if (url === "/api/mail/1") {
         return json({ ...detail.emails[0], body: "Please review." });
       }
@@ -191,7 +188,7 @@ describe("App", () => {
     expect(screen.getByLabelText("Include Drafts")).toBeChecked();
     expect(screen.getByLabelText("TDoc detail")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Lineage" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Timeline" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Timeline" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Notifications/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Log/ })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Discovery" })).not.toBeInTheDocument();
@@ -199,7 +196,7 @@ describe("App", () => {
     expect(screen.getByText("ftp://10.10.10.10:21/Meetings_3GPP_SYNC/SA3")).toBeInTheDocument();
   });
 
-  it("selects a TDoc and shows its detail and timeline", async () => {
+  it("selects a TDoc and shows its detail", async () => {
     render(<App />);
     fireEvent.click(
       await screen.findByRole("button", { name: /S3-264203 Revised CR agreed/ }),
@@ -214,11 +211,7 @@ describe("App", () => {
       "href",
       "https://10.10.10.10/ftp/Meetings_3GPP_SYNC/SA3/Docs/S3-264203.zip",
     );
-
-    fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
-    expect(
-      (await screen.findAllByText("[SA3#130][S3-264202] CR on QUIC")).length,
-    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("tab", { name: "Timeline" })).not.toBeInTheDocument();
   });
 
   it("opens the full body of a linked mail", async () => {
@@ -487,6 +480,47 @@ describe("App", () => {
     });
   });
 
+  it("refreshes tracking while deferred files are still downloading", async () => {
+    render(<App />);
+    const node = await screen.findByRole("button", {
+      name: /S3-264203 Revised CR agreed/,
+    });
+    const base = fetchMock.getMockImplementation();
+    let release: (response: Response) => void = () => {};
+    const wrapped = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (String(input).includes("/fetch")) {
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        }
+        return base!(input, init);
+      },
+    );
+    vi.stubGlobal("fetch", wrapped);
+
+    fireEvent.doubleClick(node);
+
+    expect(await screen.findByText("Fetching files…")).toBeInTheDocument();
+    expect(
+      wrapped.mock.calls.filter(([input]) =>
+        String(input).startsWith("/api/lineage"),
+      ).length,
+    ).toBeGreaterThan(0);
+
+    release(
+      json({
+        tdoc_number: "S3-264203",
+        fetched: 0,
+        artifacts: [],
+        failures: [],
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Fetching files…")).not.toBeInTheDocument(),
+    );
+  });
+
   it("shows notifications and syncs on demand", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("tab", { name: /Notifications/ }));
@@ -615,11 +649,67 @@ describe("App", () => {
     ).toHaveClass("new-file");
   });
 
-  it("finalizes and links the latest export", async () => {
+  it("exports with the default options from the menu", async () => {
     render(<App />);
-    const button = await screen.findByRole("button", { name: "Finalize" });
-    fireEvent.click(button);
-    expect(await screen.findByText("latest export")).toBeInTheDocument();
+    const open = await screen.findByRole("button", { name: "Export" });
+    expect(screen.queryByLabelText("Export options")).not.toBeInTheDocument();
+    fireEvent.click(open);
+
+    const panel = screen.getByLabelText("Export options");
+    expect(within(panel).getByLabelText("Tracked only")).toBeChecked();
+    expect(within(panel).getByLabelText("Notes")).toBeChecked();
+    expect(within(panel).getByLabelText("Meeting notes")).toBeChecked();
+    expect(within(panel).getByLabelText("State")).toBeChecked();
+    expect(within(panel).getByLabelText("Mail")).not.toBeChecked();
+
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Download Markdown" }),
+    );
+
+    const url = opened.mock.calls[0][0] as string;
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(url.startsWith("/api/export/markdown?")).toBe(true);
+    expect(params.get("tracked_only")).toBe("true");
+    expect(params.get("include_notes")).toBe("true");
+    expect(params.get("include_meeting_notes")).toBe("true");
+    expect(params.get("include_state")).toBe("true");
+    expect(params.get("include_mail")).toBe("false");
+    expect(params.get("agenda_item")).toBeNull();
+    expect(screen.queryByLabelText("Export options")).not.toBeInTheDocument();
+    opened.mockRestore();
+  });
+
+  it("exports all TDocs for a chosen agenda item", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Export" }));
+    const panel = screen.getByLabelText("Export options");
+    fireEvent.click(within(panel).getByLabelText("All TDocs"));
+    fireEvent.change(within(panel).getByLabelText("Agenda item"), {
+      target: { value: "5.3.1.3" },
+    });
+    fireEvent.click(within(panel).getByLabelText("Notes"));
+
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Download Markdown" }),
+    );
+
+    const params = new URLSearchParams(
+      (opened.mock.calls[0][0] as string).split("?")[1],
+    );
+    expect(params.get("tracked_only")).toBe("false");
+    expect(params.get("agenda_item")).toBe("5.3.1.3");
+    expect(params.get("include_notes")).toBe("false");
+    opened.mockRestore();
+  });
+
+  it("closes the export menu on Escape", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Export" }));
+    expect(screen.getByLabelText("Export options")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByLabelText("Export options")).not.toBeInTheDocument();
   });
 
   it("lists conflicts and resolves them", async () => {

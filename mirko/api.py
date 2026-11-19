@@ -1137,8 +1137,29 @@ def create_app(
         return Response(status_code=204)
 
     @app.get("/api/export/markdown", response_class=PlainTextResponse)
-    def get_markdown(include_mail: bool = False) -> PlainTextResponse:
-        content = render_markdown(folder, include_mail=include_mail)
+    def get_markdown(
+        tracked_only: bool = True,
+        agenda_item: str | None = None,
+        include_lineage: bool = True,
+        include_timeline: bool = True,
+        include_artifacts: bool = True,
+        include_notes: bool = True,
+        include_meeting_notes: bool = True,
+        include_state: bool = True,
+        include_mail: bool = False,
+    ) -> PlainTextResponse:
+        content = render_markdown(
+            folder,
+            tracked_only=tracked_only,
+            agenda_item=agenda_item or None,
+            include_lineage=include_lineage,
+            include_timeline=include_timeline,
+            include_artifacts=include_artifacts,
+            include_notes=include_notes,
+            include_meeting_notes=include_meeting_notes,
+            include_state=include_state,
+            include_mail=include_mail,
+        )
         return PlainTextResponse(
             content,
             media_type="text/markdown; charset=utf-8",

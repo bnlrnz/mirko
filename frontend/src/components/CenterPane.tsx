@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { MAX_LINEAGE_LABEL } from "../lineageTabs";
 import type {
@@ -8,17 +8,14 @@ import type {
   Lineage,
   LineageTab,
   NotificationItem,
-  TimelineEvent,
   UserAction,
 } from "../types";
 import { ConflictsView } from "./ConflictsView";
 import { LineageView } from "./LineageView";
 import { LogView } from "./LogView";
 import { NotificationsView } from "./NotificationsView";
-import { TimelineView } from "./TimelineView";
 
 export type CenterTab =
-  | "timeline"
   | "conflicts"
   | "notifications"
   | "log"
@@ -37,7 +34,6 @@ interface Props {
   onRenameLineageTab: (id: string, label: string) => void;
   onLineageFilters: (id: string, filters: Filters) => void;
   lineage: Lineage;
-  timeline: TimelineEvent[];
   notifications: NotificationItem[];
   unreadNotificationCount: number;
   seenNotifications: ReadonlySet<string>;
@@ -53,10 +49,11 @@ interface Props {
   newArtifactTdocs: ReadonlySet<string>;
   onResolve: (id: number, resolution: ConflictResolution) => void;
   onTrack: (tdoc: string, tracked: boolean) => void;
+  updating?: boolean;
+  fetching?: boolean;
 }
 
 const TABS: { id: CenterTab; label: string }[] = [
-  { id: "timeline", label: "Timeline" },
   { id: "conflicts", label: "Conflicts" },
   { id: "notifications", label: "Notifications" },
   { id: "log", label: "Log" },
@@ -71,7 +68,6 @@ export function CenterPane({
   onRenameLineageTab,
   onLineageFilters,
   lineage,
-  timeline,
   notifications,
   unreadNotificationCount,
   seenNotifications,
@@ -87,6 +83,8 @@ export function CenterPane({
   newArtifactTdocs,
   onResolve,
   onTrack,
+  updating,
+  fetching,
 }: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -94,6 +92,17 @@ export function CenterPane({
   const activeLineageTab =
     lineageTabs.find((item) => lineageTabKey(item.id) === tab) ??
     (tab.startsWith("lineage:") ? lineageTabs[0] : undefined);
+
+  // Memoized so the memoized lineage view is not invalidated by a fresh
+  // closure on every render of the surrounding panes.
+  const onActiveFilters = useCallback(
+    (next: Filters) => {
+      if (activeLineageTab) {
+        onLineageFilters(activeLineageTab.id, next);
+      }
+    },
+    [activeLineageTab, onLineageFilters],
+  );
 
   const beginRename = (item: LineageTab) => {
     setRenamingId(item.id);
@@ -213,19 +222,16 @@ export function CenterPane({
             selected={selected}
             selectedDraft={selectedDraft}
             filters={activeLineageTab.filters}
-            onFilters={(next) =>
-              onLineageFilters(activeLineageTab.id, next)
-            }
+            onFilters={onActiveFilters}
             onSelect={onSelect}
             onSelectDraft={onSelectDraft}
             focusRequest={focusRequest}
             newArtifactPaths={newArtifactPaths}
             newArtifactTdocs={newArtifactTdocs}
             onTrack={onTrack}
+            updating={updating}
+            fetching={fetching}
           />
-        ) : null}
-        {tab === "timeline" ? (
-          <TimelineView events={timeline} selected={selected} />
         ) : null}
         {tab === "conflicts" ? (
           <ConflictsView

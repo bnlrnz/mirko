@@ -8,7 +8,6 @@ import {
   notifications,
   sync,
   tdocs,
-  timeline,
   userActions,
 } from "../src/test/fixtures";
 
@@ -34,14 +33,6 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
     if (path === "/api/conflicts") return json(conflicts);
     if (path === "/api/sync/status") return json(sync);
     if (path === "/api/sync") return json({ status: "ok" });
-    if (path === "/api/finalize") {
-      return json({
-        status: "finalized",
-        export_path: "exports/mirko-SA3-130-20261016T150000Z.md",
-        mirror_links: 1,
-        finalized_at: "2026-10-16T15:00:00Z",
-      });
-    }
     if (path.endsWith("/resolve")) {
       resolved += 1;
       return json({ ...conflicts[0], status: "resolved" });
@@ -54,7 +45,6 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
       );
     }
     if (path === "/api/tdocs/S3-264202") return json(detail);
-    if (path === "/api/tdocs/S3-264202/timeline") return json(timeline);
     if (path === "/api/tdocs/S3-264203") {
       return json({
         ...detail,
@@ -64,7 +54,6 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
         is_tracked: false,
       });
     }
-    if (path === "/api/tdocs/S3-264203/timeline") return json(timeline);
     if (path === "/api/tdocs/S3-264202/track") {
       return json({ tdoc_number: "S3-264202", is_tracked: method === "POST" });
     }
@@ -85,10 +74,19 @@ test("three-pane navigation, selection sync, and conflict resolution", async ({
   await expect(detailPanel.getByText("Revised CR")).toBeVisible();
   await expect(detailPanel.getByRole("button", { name: /Track/ })).toBeVisible();
 
-  await page.getByRole("tab", { name: "Timeline" }).click();
+  await expect(page.getByRole("tab", { name: "Timeline" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Export" }).click();
+  const exportPanel = page.getByLabel("Export options");
+  await expect(exportPanel.getByLabel("Tracked only")).toBeChecked();
   await expect(
-    page.getByText("[SA3#130][S3-264202] CR on QUIC").first(),
-  ).toBeVisible();
+    exportPanel.getByLabel("Notes", { exact: true }),
+  ).toBeChecked();
+  await expect(exportPanel.getByLabel("Meeting notes")).toBeChecked();
+  await expect(exportPanel.getByLabel("Mail")).not.toBeChecked();
+  await exportPanel.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByLabel("Export options")).toHaveCount(0);
 
   await page.getByRole("tab", { name: /Conflicts/ }).click();
   const conflictList = page.getByLabel("Open conflicts");

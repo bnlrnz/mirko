@@ -2,7 +2,7 @@ import {
   faEnvelope,
   faEnvelopesBulk,
 } from "@fortawesome/free-solid-svg-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { agendaFilterOptions } from "../agendaFilter";
 import type {
@@ -25,6 +25,39 @@ import {
   NODE_WIDTH,
 } from "./NodeVisuals";
 
+interface LineageNodeItemProps {
+  node: PositionedNode;
+  selected: boolean;
+  newFile: boolean;
+  recent: boolean;
+  onSelectNode: (node: LineageNode) => void;
+  onToggleTrack: (node: LineageNode) => void;
+}
+
+// Memoized so toolbar status changes and selection changes do not re-render
+// every node in a large graph.
+const LineageNodeItem = memo(function LineageNodeItem({
+  node,
+  selected,
+  newFile,
+  recent,
+  onSelectNode,
+  onToggleTrack,
+}: LineageNodeItemProps) {
+  return (
+    <LineageNodeGlyph
+      node={node}
+      x={node.x}
+      y={node.y}
+      selected={selected}
+      newFile={newFile}
+      recent={recent}
+      onClick={() => onSelectNode(node)}
+      onDoubleClick={() => onToggleTrack(node)}
+    />
+  );
+});
+
 interface Props {
   lineage: Lineage;
   selected: string | null;
@@ -37,6 +70,8 @@ interface Props {
   newArtifactPaths?: ReadonlySet<string>;
   newArtifactTdocs?: ReadonlySet<string>;
   onTrack?: (tdoc: string, tracked: boolean) => void;
+  updating?: boolean;
+  fetching?: boolean;
 }
 
 interface PositionedNode extends LineageNode {
@@ -214,32 +249,46 @@ export function chainDrafts(lineage: Lineage): Lineage {
     return lineage;
   }
 
-  const edges: LineageEdge[] = lineage.edges
+  const baseEdges: LineageEdge[] = lineage.edges
     .filter(
       (edge) => !draftIds.has(edge.source) && !draftIds.has(edge.target),
     )
     .map((edge) => ({ ...edge, emails: [...(edge.emails ?? [])] }));
+  const incomingByTarget = new Map<string, LineageEdge[]>();
+  const outgoingBySource = new Map<string, LineageEdge[]>();
+  for (const edge of baseEdges) {
+    const incomingList = incomingByTarget.get(edge.target);
+    if (incomingList) {
+      incomingList.push(edge);
+    } else {
+      incomingByTarget.set(edge.target, [edge]);
+    }
+    const outgoingList = outgoingBySource.get(edge.source);
+    if (outgoingList) {
+      outgoingList.push(edge);
+    } else {
+      outgoingBySource.set(edge.source, [edge]);
+    }
+  }
+  // Edges around a TDoc with drafts are replaced by one segment per draft
+  // interval. Mark them instead of splicing, so each edge is visited once.
+  const suppressed = new Set<LineageEdge>();
+  const added: LineageEdge[] = [];
 
   for (const [tdoc, group] of draftsByTdoc) {
     const tdocNode = byId.get(tdoc);
     const drafts = [...group].sort(compareDrafts);
-    const incoming = edges.filter((edge) => edge.target === tdoc);
-    const outgoing = edges.filter((edge) => edge.source === tdoc);
+    const incoming = incomingByTarget.get(tdoc) ?? [];
+    const outgoing = outgoingBySource.get(tdoc) ?? [];
     const hasIncoming = incoming.length > 0;
 
     if (hasIncoming) {
       for (const edge of incoming) {
-        const index = edges.indexOf(edge);
-        if (index >= 0) {
-          edges.splice(index, 1);
-        }
+        suppressed.add(edge);
       }
     } else if (outgoing.length > 0) {
       for (const edge of outgoing) {
-        const index = edges.indexOf(edge);
-        if (index >= 0) {
-          edges.splice(index, 1);
-        }
+        suppressed.add(edge);
       }
     }
 
@@ -254,12 +303,12 @@ export function chainDrafts(lineage: Lineage): Lineage {
           emails: [],
         };
         firstSegments.push(segment);
-        edges.push(segment);
+        added.push(segment);
       }
     } else {
       const segment = draftLink(tdoc, first.tdoc_number);
       firstSegments.push(segment);
-      edges.push(segment);
+      added.push(segment);
     }
 
     const draftSegments: LineageEdge[] = [];
@@ -269,7 +318,7 @@ export function chainDrafts(lineage: Lineage): Lineage {
         drafts[index].tdoc_number,
       );
       draftSegments.push(segment);
-      edges.push(segment);
+      added.push(segment);
     }
 
     const draftMoments = drafts.map((draft) => nodeMoment(draft));
@@ -280,7 +329,7 @@ export function chainDrafts(lineage: Lineage): Lineage {
         target: tdoc,
         emails: [],
       };
-      edges.push(lastSegment);
+      added.push(lastSegment);
       for (let index = 0; index < incoming.length; index += 1) {
         const edge = incoming[index];
         const buckets = distributeMails(edge.emails ?? [], [
@@ -305,7 +354,7 @@ export function chainDrafts(lineage: Lineage): Lineage {
           source: last.tdoc_number,
           emails: [],
         };
-        edges.push(lastSegment);
+        added.push(lastSegment);
         const buckets = distributeMails(edge.emails ?? [], [
           nodeMoment(tdocNode),
           ...draftMoments,
@@ -324,6 +373,9 @@ export function chainDrafts(lineage: Lineage): Lineage {
     }
   }
 
+  const edges = baseEdges
+    .filter((edge) => !suppressed.has(edge))
+    .concat(added);
   for (const edge of edges) {
     edge.emails?.sort((left, right) => {
       const time = mailMoment(left).localeCompare(mailMoment(right));
@@ -344,31 +396,56 @@ export function layoutLineage(lineage: Lineage): {
     (edge) => byId.has(edge.source) && byId.has(edge.target),
   );
   const incoming = new Map<string, LineageEdge[]>();
+  const outgoing = new Map<string, LineageEdge[]>();
+  const indegree = new Map<string, number>();
+  for (const node of lineage.nodes) {
+    indegree.set(node.tdoc_number, 0);
+  }
   for (const edge of edges) {
-    incoming.set(edge.target, [
-      ...(incoming.get(edge.target) ?? []),
-      edge,
-    ]);
+    const incomingList = incoming.get(edge.target);
+    if (incomingList) {
+      incomingList.push(edge);
+    } else {
+      incoming.set(edge.target, [edge]);
+    }
+    const outgoingList = outgoing.get(edge.source);
+    if (outgoingList) {
+      outgoingList.push(edge);
+    } else {
+      outgoing.set(edge.source, [edge]);
+    }
+    if (edge.source !== edge.target) {
+      indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+    }
   }
 
+  // Longest path over the dependency DAG (Kahn's algorithm): every node is
+  // visited once, so dense graphs stay cheap. Nodes that only sit in a cycle
+  // keep the depth of their deepest acyclic predecessor instead of drifting
+  // one column per relaxation pass.
   const depth = new Map<string, number>();
+  const queue: string[] = [];
   for (const node of lineage.nodes) {
     depth.set(node.tdoc_number, 0);
+    if ((indegree.get(node.tdoc_number) ?? 0) === 0) {
+      queue.push(node.tdoc_number);
+    }
   }
-  for (let pass = 0; pass < lineage.nodes.length; pass += 1) {
-    let changed = false;
-    for (const edge of edges) {
-      if (!depth.has(edge.source) || !depth.has(edge.target)) {
+  while (queue.length > 0) {
+    const id = queue.pop() as string;
+    const next = (depth.get(id) ?? 0) + 1;
+    for (const edge of outgoing.get(id) ?? []) {
+      if (edge.source === edge.target) {
         continue;
       }
-      const candidate = (depth.get(edge.source) ?? 0) + 1;
-      if (candidate > (depth.get(edge.target) ?? 0)) {
-        depth.set(edge.target, candidate);
-        changed = true;
+      if (next > (depth.get(edge.target) ?? 0)) {
+        depth.set(edge.target, next);
       }
-    }
-    if (!changed) {
-      break;
+      const remaining = (indegree.get(edge.target) ?? 0) - 1;
+      indegree.set(edge.target, remaining);
+      if (remaining === 0) {
+        queue.push(edge.target);
+      }
     }
   }
 
@@ -855,7 +932,7 @@ function filterLineage(lineage: Lineage, filters: Filters): Lineage {
   };
 }
 
-export function LineageView({
+export function LineageViewBase({
   lineage,
   selected,
   selectedDraft = null,
@@ -867,6 +944,8 @@ export function LineageView({
   newArtifactPaths = EMPTY_PATHS,
   newArtifactTdocs = EMPTY_PATHS,
   onTrack,
+  updating = false,
+  fetching = false,
 }: Props) {
   const includeDrafts = filters.includeEphemeral;
   const [zoom, setZoom] = useState(1);
@@ -954,6 +1033,57 @@ export function LineageView({
       ),
     [visibleLineage.edges, positions],
   );
+
+  // Highlight what the last lineage update changed: new nodes and edges plus
+  // nodes whose tracked flag flipped. The class fades after a moment, so a
+  // tracking update shows which part of the graph just appeared.
+  const previousGraph = useRef<{
+    nodes: Map<string, boolean>;
+    edges: Set<string>;
+  } | null>(null);
+  const [recentNodes, setRecentNodes] =
+    useState<ReadonlySet<string>>(EMPTY_PATHS);
+  const [recentEdges, setRecentEdges] =
+    useState<ReadonlySet<string>>(EMPTY_PATHS);
+
+  useEffect(() => {
+    const next = {
+      nodes: new Map(
+        lineage.nodes.map((node) => [
+          node.tdoc_number,
+          Boolean(node.is_tracked),
+        ]),
+      ),
+      edges: new Set(lineage.edges.map(edgeMailKey)),
+    };
+    const previous = previousGraph.current;
+    previousGraph.current = next;
+    if (!previous) {
+      return;
+    }
+    const changedNodes = new Set<string>();
+    for (const [id, tracked] of next.nodes) {
+      if (!previous.nodes.has(id) || previous.nodes.get(id) !== tracked) {
+        changedNodes.add(id);
+      }
+    }
+    const changedEdges = new Set<string>();
+    for (const key of next.edges) {
+      if (!previous.edges.has(key)) {
+        changedEdges.add(key);
+      }
+    }
+    if (changedNodes.size === 0 && changedEdges.size === 0) {
+      return;
+    }
+    setRecentNodes(changedNodes);
+    setRecentEdges(changedEdges);
+    const timer = window.setTimeout(() => {
+      setRecentNodes(EMPTY_PATHS);
+      setRecentEdges(EMPTY_PATHS);
+    }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [lineage]);
 
   const stopMomentum = () => {
     if (momentum.current.frame !== null) {
@@ -1058,17 +1188,32 @@ export function LineageView({
     [],
   );
 
-  const selectNode = (node: LineageNode) => {
-    if (node.node_kind === "draft") {
-      if (onSelectDraft && node.artifact_id != null) {
-        onSelectDraft(node.artifact_id);
-        return;
+  const selectNode = useCallback(
+    (node: LineageNode) => {
+      if (node.node_kind === "draft") {
+        if (onSelectDraft && node.artifact_id != null) {
+          onSelectDraft(node.artifact_id);
+          return;
+        }
+        onSelect(
+          node.attached_to ?? node.tdoc_number,
+          node.artifact_id ?? undefined,
+        );
+      } else {
+        onSelect(node.tdoc_number);
       }
-      onSelect(node.attached_to ?? node.tdoc_number, node.artifact_id ?? undefined);
-    } else {
-      onSelect(node.tdoc_number);
-    }
-  };
+    },
+    [onSelect, onSelectDraft],
+  );
+
+  const toggleTrack = useCallback(
+    (node: LineageNode) => {
+      if (node.node_kind !== "draft" && onTrack) {
+        onTrack(node.tdoc_number, !node.is_tracked);
+      }
+    },
+    [onTrack],
+  );
 
   const openMailView = (mail: MailSummary) => {
     setExpandedMailEdge(null);
@@ -1280,6 +1425,18 @@ export function LineageView({
       <div className="lineage-toolbar">
         <span>{layout.nodes.length} nodes</span>
         <span>{visibleEdges.length} edges</span>
+        {updating ? (
+          <span className="lineage-update" role="status">
+            <span className="lineage-spinner" aria-hidden="true" />
+            Updating lineage…
+          </span>
+        ) : null}
+        {fetching ? (
+          <span className="lineage-update" role="status">
+            <span className="lineage-spinner" aria-hidden="true" />
+            Fetching files…
+          </span>
+        ) : null}
         <span className="lineage-legend" aria-label="Node state colors">
           {LEGEND.map(([className, label]) => (
             <span key={className} className="legend-item">
@@ -1505,7 +1662,9 @@ export function LineageView({
                   key={`${edge.source}-${edge.target}-${edge.kind}`}
                   className={`edge ${edge.kind} ${
                     edge.verified ? "verified" : "unverified"
-                  } ${edge.active === false || edge.muted ? "muted" : ""}`}
+                  } ${edge.active === false || edge.muted ? "muted" : ""} ${
+                    recentEdges.has(edgeMailKey(edge)) ? "recent" : ""
+                  }`}
                   d={edgePath(edge, positions)}
                   data-testid={`edge-${edge.source}-${edge.target}`}
                 />
@@ -1575,23 +1734,18 @@ export function LineageView({
                       : false
                     : newArtifactTdocs.has(node.tdoc_number);
                 return (
-                  <LineageNodeGlyph
+                  <LineageNodeItem
                     key={node.tdoc_number}
                     node={node}
-                    x={node.x}
-                    y={node.y}
                     selected={
                       node.node_kind === "draft"
                         ? selectedDraft === node.artifact_id
                         : selected === node.tdoc_number
                     }
                     newFile={newFile}
-                    onClick={() => selectNode(node)}
-                    onDoubleClick={() => {
-                      if (node.node_kind !== "draft" && onTrack) {
-                        onTrack(node.tdoc_number, !node.is_tracked);
-                      }
-                    }}
+                    recent={recentNodes.has(node.tdoc_number)}
+                    onSelectNode={selectNode}
+                    onToggleTrack={toggleTrack}
                   />
                 );
               })}
@@ -1618,3 +1772,5 @@ export function LineageView({
     </div>
   );
 }
+
+export const LineageView = memo(LineageViewBase);
