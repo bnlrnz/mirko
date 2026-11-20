@@ -213,10 +213,11 @@ export function LineageNodeGlyph({
       }}
     >
       <rect width={NODE_WIDTH} height={NODE_HEIGHT} rx={9} />
-      <circle cx={18} cy={18} r={7} className="state-bubble">
-        <title>{node.decision ?? "unknown"}</title>
-      </circle>
-      <text x={32} y={22} className="node-id">
+        {node.node_kind !== "draft" && (
+          <circle cx={18} cy={18} r={7} className="state-bubble"/>
+        )}
+      <title>{node.decision ?? "unknown"}</title>
+      <text x={node.node_kind === "draft" ? 12 : 32} y={22} className="node-id">
         {node.node_kind === "draft" ? "DRAFT" : node.tdoc_number}
       </text>
       {node.is_tracked && node.node_kind !== "draft" ? (
