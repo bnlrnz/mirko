@@ -356,6 +356,8 @@ For every cycle:
 3. Fetch new names and names whose `(size, mtime)` changed, except when
    `sync.lazy_drafts` is true: `Drafts/` entries are recorded in the manifest with
    `fetch_state=pending` and as `status=remote` artifacts, without downloading.
+   For tracked artifacts that look unchanged at minute precision, one bounded
+   `MDTM` pass supplies an exact UTC timestamp before the diff is computed.
 4. Record an `artifact_observation`; new content becomes a new blob (never overwrite
    an existing blob). This is the **single-download policy**: one fetch per remote
    identity, and no re-fetch while identity is unchanged. Deferred artifacts are
@@ -376,6 +378,7 @@ Interface:
 ```python
 class FtpClient(Protocol):
     def list(self, path: str) -> list[RemoteEntry]: ...
+    def stat_many(self, paths: Iterable[str]) -> dict[str, str]: ...
     def fetch(self, path: str, dest: Path) -> None: ...
 ```
 
@@ -389,6 +392,17 @@ the protocol.
   reject path traversal in cache paths.
 - Listing parse supports Unix-style `ls -l` output; failures are logged with a raw
   sample but never abort the whole cycle.
+- Listings disable `ftp:use-mdtm` because lftp otherwise issues one `MDTM` round
+  trip per entry. Large draft folders then exceed the client timeout. `LIST`
+  timestamps are minute-precision, which is what manifest diffing compares.
+- The child process is pinned to `TZ=UTC`. lftp renders `LIST` timestamps in the
+  process timezone, while the application stores UTC; without pinning, a host in
+  another timezone shifts every listed mtime.
+- `stat_many(paths)` refines timestamps for tracked artifacts only, in one lftp
+  session using `quote MDTM` per path. A `550` reply (file gone) is skipped, and
+  unexpected output falls back to the minute-precision `LIST` value. Untracked
+  files, new files, and files that visibly changed at `LIST` precision need no
+  extra round trip.
 
 ### 7.3 HTML ingestion
 

@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -165,6 +165,10 @@ class Syncer:
         try:
             manifest = ManifestStore(connection, self.source.endpoint_id)
             existing = manifest.load(directory)
+            tracked = self._tracked_artifact_paths(connection, directory)
+            files = self._apply_precise_mtimes(
+                files, directory, existing, tracked
+            )
             diff = diff_listing(existing, files)
             lazy = self._is_lazy(directory)
 
@@ -386,6 +390,75 @@ class Syncer:
             return False
         drafts = normalize_remote_path(self.paths.drafts)
         return directory == drafts or directory.startswith(f"{drafts}/")
+
+    def _tracked_artifact_paths(
+        self, connection: sqlite3.Connection, directory: str
+    ) -> set[str]:
+        rows = connection.execute(
+            "SELECT a.logical_path FROM artifact a "
+            "JOIN tdoc t ON t.tdoc_number = a.tdoc_number "
+            "WHERE t.is_tracked = 1 "
+            "AND a.kind IN ('working_draft', 'inbox_document')"
+        ).fetchall()
+        return {
+            row["logical_path"]
+            for row in rows
+            if row["logical_path"].rpartition("/")[0] == directory
+        }
+
+    def _apply_precise_mtimes(
+        self,
+        files: list[RemoteEntry],
+        directory: str,
+        existing: dict[str, ManifestEntry],
+        tracked: set[str],
+    ) -> list[RemoteEntry]:
+        """Refresh mtimes for tracked files that look unchanged at LIST precision.
+
+        MDTM gives UTC timestamps with seconds and also avoids lftp's handling
+        of 12-hour server listings. Only files that are already tracked and
+        whose name, size, and minute look unchanged need the extra round trip;
+        anything else is new or changed regardless of seconds.
+        """
+        if not tracked:
+            return files
+        candidates: list[str] = []
+        for entry in files:
+            logical_path = join_remote_path(directory, entry.name)
+            if logical_path not in tracked:
+                continue
+            previous = existing.get(entry.name)
+            if previous is None:
+                # New files are fetched regardless, so seconds add nothing.
+                continue
+            if previous.size != entry.size:
+                continue
+            if (
+                previous.mtime
+                and entry.mtime
+                and previous.mtime[:16] != entry.mtime[:16]
+            ):
+                continue
+            candidates.append(logical_path)
+        if not candidates:
+            return files
+
+        try:
+            precise = self.client.stat_many(candidates)
+        except FtpError as exc:
+            logger.warning("mtime lookup failed for %r: %s", directory, exc)
+            return files
+        if not precise:
+            return files
+        return [
+            replace(
+                entry,
+                mtime=precise.get(
+                    join_remote_path(directory, entry.name), entry.mtime
+                ),
+            )
+            for entry in files
+        ]
 
     def fetch_for_tdoc(
         self, tdoc_number: str, *, include_lineage: bool = True

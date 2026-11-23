@@ -35,10 +35,32 @@ class ManifestDiff:
         return self.new + self.changed
 
 
+def _is_precise_mtime(value: str) -> bool:
+    return len(value) >= 19 and value[17:19] != "00"
+
+
+def _same_mtime(existing: str, listed: str) -> bool:
+    """Compare listing timestamps with the precision available on each side.
+
+    FTP ``LIST`` reports minutes, while values refined through ``MDTM`` carry
+    seconds. When only one side has seconds there is nothing better to compare
+    than the minute, so the entry stays unchanged (the unchanged path still
+    records the more precise value). Two precise values are compared exactly,
+    which catches same-size edits within one minute.
+    """
+    if existing[:16] != listed[:16]:
+        return False
+    if _is_precise_mtime(existing) and _is_precise_mtime(listed):
+        return existing[:19] == listed[:19]
+    return True
+
+
 def _identity_changed(existing: ManifestEntry, listed: RemoteEntry) -> bool:
     if existing.size != listed.size:
         return True
-    if existing.mtime and listed.mtime and existing.mtime != listed.mtime:
+    if existing.mtime and listed.mtime and not _same_mtime(
+        existing.mtime, listed.mtime
+    ):
         return True
     if existing.fetch_state == "pending":
         # The content hash is intentionally unknown for deferred downloads;

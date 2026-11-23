@@ -177,6 +177,107 @@ def test_lftp_list_builds_safe_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'cd "/Meetings_3GPP_SYNC/SA3"' in script
     assert 'cls -l "Drafts"' in script
     assert "s3cret" not in captured["args"]
+    assert captured["kwargs"]["env"]["TZ"] == "UTC"
+
+
+def test_lftp_pins_utc_even_when_host_timezone_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, stdout=LISTING, stderr="")
+
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    monkeypatch.setattr("mirko.ftp.subprocess.run", fake_run)
+    LftpFtpClient(source(), executable="/opt/lftp").list("Drafts")
+
+    assert captured["kwargs"]["env"]["TZ"] == "UTC"
+
+
+def test_lftp_list_disables_per_file_mdtm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, stdout=LISTING, stderr="")
+
+    monkeypatch.setattr("mirko.ftp.subprocess.run", fake_run)
+    client = LftpFtpClient(source(), executable="/opt/lftp")
+
+    client.list("Inbox/Drafts")
+
+    script = captured["kwargs"]["input"]
+    # Large directories otherwise trigger one MDTM round trip per entry.
+    assert "set ftp:use-mdtm off" in script
+    assert script.index("set ftp:use-mdtm off") < script.index(
+        'cls -l "Inbox/Drafts"'
+    )
+
+
+def test_lftp_stat_many_parses_batch_mdtm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=(
+                "213 20261119154304\n"
+                "550 The system cannot find the file specified.\n"
+                "213 20261118234228\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("mirko.ftp.subprocess.run", fake_run)
+    client = LftpFtpClient(source(), executable="/opt/lftp")
+
+    stamps = client.stat_many(
+        [
+            "Inbox/Drafts/a file.docx",
+            "Inbox/Drafts/missing.docx",
+            "Inbox/Drafts/a file.docx",
+            "Inbox/final.zip",
+        ]
+    )
+
+    assert stamps == {
+        "Inbox/Drafts/a file.docx": "2026-11-19T15:43:04",
+        "Inbox/final.zip": "2026-11-18T23:42:28",
+    }
+    script = captured["kwargs"]["input"]
+    # A single session handles every path, and only unique paths are sent.
+    assert script.count("quote MDTM ") == 3
+    assert 'quote MDTM "Inbox/Drafts/a file.docx"' in script
+    assert 'quote MDTM "Inbox/final.zip"' in script
+
+
+def test_lftp_stat_many_falls_back_on_output_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args, 0, stdout="213 20261119154304\n", stderr=""
+        )
+
+    monkeypatch.setattr("mirko.ftp.subprocess.run", fake_run)
+    client = LftpFtpClient(source(), executable="/opt/lftp")
+
+    assert client.stat_many(["a.docx", "b.docx"]) == {}
+
+
+def test_lftp_stat_many_skips_unsafe_paths() -> None:
+    client = LftpFtpClient(source(), executable="/opt/lftp")
+
+    with pytest.raises(FtpError):
+        client.stat_many(["../etc/passwd"])
 
 
 def test_lftp_fetch_builds_safe_command(

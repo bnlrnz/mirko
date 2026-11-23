@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mirko.ftp import FakeFtpClient, FtpError
+from mirko.ftp import FakeFtpClient, FakeRemoteFile, RemoteEntry
+from mirko.ingest.filename_ingest import FilenameIngestor
 from mirko.meeting_folder import MeetingFolder
 from mirko.sync import Syncer
 
@@ -55,6 +57,34 @@ def artifact_by_path(folder: MeetingFolder, logical_path: str):
     )
     assert len(found) == 1
     return found[0]
+
+
+class _MinuteListingFake(FakeFtpClient):
+    """List at FTP ``LIST`` precision while ``stat_many`` stays precise."""
+
+    def list(self, path: str) -> list[RemoteEntry]:
+        entries = super().list(path)
+        return [
+            replace(
+                entry,
+                mtime=(
+                    f"{entry.mtime[:16]}:00" if entry.mtime is not None else None
+                ),
+            )
+            for entry in entries
+        ]
+
+
+def _track(folder: MeetingFolder, tdoc_number: str) -> None:
+    connection = folder.connect()
+    try:
+        connection.execute(
+            "UPDATE tdoc SET is_tracked = 1 WHERE tdoc_number = ?",
+            (tdoc_number,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def test_first_sync_fetches_all_listed_files(tmp_path: Path) -> None:
@@ -136,6 +166,96 @@ def test_second_sync_does_not_refetch(tmp_path: Path) -> None:
     assert client.fetch_calls == []
     assert len(rows(folder, "SELECT * FROM blob")) == 1
     assert len(rows(folder, "SELECT * FROM artifact_observation")) == 1
+
+
+def test_only_tracked_artifacts_get_precise_mtimes(tmp_path: Path) -> None:
+    folder = make_folder(tmp_path)
+    tracked = "Inbox/Drafts/draft S3-264314-r1.docx"
+    untracked = "Inbox/Drafts/draft S3-264315-r1.docx"
+    client = _MinuteListingFake(
+        {
+            tracked: FakeRemoteFile(b"tracked", "2026-10-16T14:37:42"),
+            untracked: FakeRemoteFile(b"other", "2026-10-16T14:38:11"),
+        }
+    )
+    syncer = Syncer(folder, client, clock=lambda: NOW)
+    syncer.sync()
+    FilenameIngestor(folder, clock=lambda: NOW).ingest()
+    _track(folder, "S3-264314")
+
+    client.stat_calls.clear()
+    client.fetch_calls.clear()
+    report = syncer.sync()
+
+    assert client.stat_calls == [tracked]
+    # Refining the timestamp does not re-fetch unchanged content.
+    assert client.fetch_calls == []
+    assert report.failures == ()
+    entries = {
+        row["name"]: row["mtime"]
+        for row in rows(folder, "SELECT name, mtime FROM remote_entry")
+    }
+    assert entries["draft S3-264314-r1.docx"] == "2026-10-16T14:37:42"
+    assert entries["draft S3-264315-r1.docx"] == "2026-10-16T14:38:00"
+
+    client.stat_calls.clear()
+    client.fetch_calls.clear()
+    syncer.sync()
+
+    assert client.stat_calls == [tracked]
+    assert client.fetch_calls == []
+
+
+def test_changed_tracked_file_skips_precise_mtime_lookup(
+    tmp_path: Path,
+) -> None:
+    folder = make_folder(tmp_path)
+    path = "Inbox/Drafts/draft S3-264314-r1.docx"
+    client = _MinuteListingFake(
+        {path: FakeRemoteFile(b"first", "2026-10-16T14:37:42")}
+    )
+    syncer = Syncer(folder, client, clock=lambda: NOW)
+    syncer.sync()
+    FilenameIngestor(folder, clock=lambda: NOW).ingest()
+    _track(folder, "S3-264314")
+
+    client.stat_calls.clear()
+    client.fetch_calls.clear()
+    client.add(path, b"second", mtime="2026-10-16T15:30:12")
+    report = syncer.sync()
+
+    # The LIST minute already differs from the manifest, so the content is
+    # fetched without an extra MDTM round trip.
+    assert client.stat_calls == []
+    assert client.fetch_calls == [path]
+    assert report.failures == ()
+
+
+def test_mtime_lookup_failure_falls_back_to_listing(tmp_path: Path) -> None:
+    folder = make_folder(tmp_path)
+    path = "Inbox/Drafts/draft S3-264314-r1.docx"
+    client = _MinuteListingFake(
+        {path: FakeRemoteFile(b"content", "2026-10-16T14:37:42")}
+    )
+    syncer = Syncer(folder, client, clock=lambda: NOW)
+    syncer.sync()
+    FilenameIngestor(folder, clock=lambda: NOW).ingest()
+    _track(folder, "S3-264314")
+
+    client.stat_calls.clear()
+    client.fetch_calls.clear()
+    client.fail_stat.add(path)
+    report = syncer.sync()
+
+    assert client.stat_calls == [path]
+    assert client.fetch_calls == []
+    assert report.failures == ()
+    entry = rows(
+        folder,
+        "SELECT mtime FROM remote_entry WHERE name = ?",
+        ("draft S3-264314-r1.docx",),
+    )[0]
+    assert entry["mtime"] == "2026-10-16T14:37:00"
 
 
 def test_changed_content_creates_new_blob_and_observation(

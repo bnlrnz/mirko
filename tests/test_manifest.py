@@ -61,6 +61,50 @@ def test_diff_classifies_new_changed_unchanged_and_missing() -> None:
     ]
 
 
+def test_mdtm_seconds_do_not_churn_minute_precision_listing() -> None:
+    # Entries recorded while lftp used MDTM carry seconds; listings obtained
+    # without per-file MDTM only have minute precision. They must still be
+    # treated as unchanged, otherwise every upgrade re-fetches the folder.
+    existing = {
+        "a.docx": manifest_entry("a.docx", mtime="2026-10-16T14:00:37"),
+    }
+    diff = diff_listing(existing, [remote("a.docx", mtime="2026-10-16T14:00:00")])
+    assert [entry.name for entry in diff.unchanged] == ["a.docx"]
+    assert diff.changed == ()
+
+
+def test_minute_to_precise_upgrade_does_not_force_fetch() -> None:
+    # A tracked artifact recorded at LIST precision receives a precise MDTM on
+    # the next pass. The unchanged path records the better timestamp without
+    # re-fetching the content.
+    existing = {
+        "a.docx": manifest_entry("a.docx", mtime="2026-10-16T14:00:00"),
+    }
+    diff = diff_listing(
+        existing, [remote("a.docx", mtime="2026-10-16T14:00:37")]
+    )
+    assert [entry.name for entry in diff.unchanged] == ["a.docx"]
+
+    # Once both sides are precise, an edit within the same minute is visible.
+    upgraded = {
+        "a.docx": manifest_entry("a.docx", mtime="2026-10-16T14:00:37"),
+    }
+    edited = diff_listing(
+        upgraded, [remote("a.docx", mtime="2026-10-16T14:00:42")]
+    )
+    assert [entry.name for entry in edited.changed] == ["a.docx"]
+
+
+def test_precise_mtimes_compare_seconds() -> None:
+    existing = {
+        "a.docx": manifest_entry("a.docx", mtime="2026-10-16T14:00:37"),
+    }
+    diff = diff_listing(
+        existing, [remote("a.docx", mtime="2026-10-16T14:00:42")]
+    )
+    assert [entry.name for entry in diff.changed] == ["a.docx"]
+
+
 def test_missing_blob_hash_forces_fetch() -> None:
     existing = {"a.docx": manifest_entry("a.docx", blob_hash=None)}
     diff = diff_listing(existing, [remote("a.docx")])

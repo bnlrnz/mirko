@@ -63,6 +63,18 @@ _SIZE_DATE_NAME_RE = re.compile(
 _DATE_NAME_RE = re.compile(
     rf"^\s*(?P<date>{_DATE_PATTERN})\s+(?P<name>.+?)\s*$"
 )
+_MDTM_RE = re.compile(r"^213 (\d{14})\s*$")
+
+
+def _parse_mdtm_response(value: str) -> str | None:
+    match = _MDTM_RE.match(value.strip())
+    if match is None:
+        return None
+    stamp = match.group(1)
+    return (
+        f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}"
+        f"T{stamp[8:10]}:{stamp[10:12]}:{stamp[12:14]}"
+    )
 
 
 class FtpError(RuntimeError):
@@ -71,6 +83,8 @@ class FtpError(RuntimeError):
 
 class FtpClient(Protocol):
     def list(self, path: str) -> list[RemoteEntry]: ...
+
+    def stat_many(self, paths: Iterable[str]) -> dict[str, str]: ...
 
     def fetch(self, path: str, dest: Path) -> None: ...
 
@@ -288,6 +302,10 @@ class LftpFtpClient:
         environment = dict(os.environ)
         environment.setdefault("LC_ALL", "C")
         environment.setdefault("LANG", "C")
+        # `cls -l` renders LIST timestamps in the process timezone, while the
+        # rest of the app (and MDTM) uses UTC. Pin the child to UTC so stored
+        # mtimes do not shift with the host's DST rules.
+        environment["TZ"] = "UTC"
         try:
             result = subprocess.run(
                 [self.executable],
@@ -318,7 +336,15 @@ class LftpFtpClient:
     def list(self, path: str) -> list[RemoteEntry]:
         relative = normalize_remote_path(path)
         target = f" {_quote_lftp(relative)}" if relative else ""
-        script = self._script([f"cls -l{target}"])
+        # With MDTM enabled (the lftp default) `cls -l` issues one MDTM per
+        # entry to recover second-precision timestamps. Large draft folders
+        # hold hundreds of files, which turns a single listing into hundreds
+        # of round trips and easily exceeds the client timeout. The LIST
+        # output already carries minute-precision timestamps, which is all
+        # the manifest diff needs.
+        script = self._script(
+            ["set ftp:use-mdtm off", f"cls -l{target}"]
+        )
         entries, unparsed = parse_ls_listing(self._run(script))
         for line in unparsed[:5]:
             logger.warning("unparsed lftp listing line: %s", line)
@@ -339,6 +365,43 @@ class LftpFtpClient:
                 continue
             safe.append(entry if name == entry.name else replace(entry, name=name))
         return safe
+
+    def stat_many(self, paths: Iterable[str]) -> dict[str, str]:
+        """Return precise UTC mtimes for a bounded set of remote paths.
+
+        lftp has no batch stat command, but one session can issue ``quote
+        MDTM`` per file. Failures are reported by the server as a single
+        response line and do not abort the script; callers fall back to the
+        minute-precision ``LIST`` value for any path that is missing here.
+        """
+        targets: list[str] = []
+        for path in paths:
+            normalized = normalize_remote_path(path)
+            if normalized and normalized not in targets:
+                targets.append(normalized)
+        if not targets:
+            return {}
+
+        output = self._run(
+            self._script(
+                [f"quote MDTM {_quote_lftp(target)}" for target in targets]
+            )
+        )
+        lines = [line for line in output.splitlines() if line.strip()]
+        if len(lines) != len(targets):
+            logger.warning(
+                "unexpected MDTM output from lftp: %d lines for %d paths",
+                len(lines),
+                len(targets),
+            )
+            return {}
+
+        stamps: dict[str, str] = {}
+        for target, line in zip(targets, lines):
+            mtime = _parse_mdtm_response(line)
+            if mtime is not None:
+                stamps[target] = mtime
+        return stamps
 
     def fetch(self, path: str, dest: Path) -> None:
         relative = normalize_remote_path(path)
@@ -366,8 +429,10 @@ class FakeFtpClient:
     ) -> None:
         self._files: dict[str, FakeRemoteFile] = {}
         self.list_calls: list[str] = []
+        self.stat_calls: list[str] = []
         self.fetch_calls: list[str] = []
         self.fail_list: set[str] = set()
+        self.fail_stat: set[str] = set()
         self.fail_fetch: set[str] = set()
         for path, value in (files or {}).items():
             self.add(path, value)
@@ -410,6 +475,18 @@ class FakeFtpClient:
                     )
                 )
         return entries
+
+    def stat_many(self, paths: Iterable[str]) -> dict[str, str]:
+        stamps: dict[str, str] = {}
+        for path in paths:
+            remote_path = self._normalize(path)
+            self.stat_calls.append(remote_path)
+            if remote_path in self.fail_stat:
+                raise FtpError(f"fake stat failure: {remote_path}")
+            file = self._files.get(remote_path)
+            if file is not None:
+                stamps[remote_path] = file.mtime
+        return stamps
 
     def fetch(self, path: str, dest: Path) -> None:
         remote_path = self._normalize(path)

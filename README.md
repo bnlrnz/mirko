@@ -29,7 +29,9 @@ Excel/HTML/filename/mail ingestion → assertions and conflicts. It polls immedi
 on startup, then adapts between meeting and idle intervals with jitter and backoff.
 The UI refreshes sync status every five seconds and reloads data after a new attempt. Working drafts are deferred by default: only filenames are listed until a
 TDoc is opened or tracked, then its artifacts (and lineage neighbours on track) are
-downloaded on demand. Agenda HTML and Inbox mail remain eager.
+downloaded on demand. Agenda HTML and Inbox mail remain eager. Listings skip
+per-file `MDTM` so large folders stay fast; tracked artifacts get an exact UTC
+timestamp from one batched `MDTM` pass.
 
 - `mirko/config.py`, `meeting_folder.py` — validated config and folder layout.
 - `mirko/migrations/` — schema plus `edge_current` / `tdoc_current` views.
