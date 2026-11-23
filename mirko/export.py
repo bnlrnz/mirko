@@ -35,6 +35,28 @@ def _label(value: str | None) -> str:
     return text.replace("\n", "<br/>")
 
 
+def _has_detail_content(
+    summary: dict,
+    *,
+    include_mail: bool,
+    include_notes: bool,
+    include_meeting_notes: bool,
+) -> bool:
+    """Keep detail sections only for TDocs that add something beyond metadata.
+
+    The summary table already covers every TDoc in scope. Emitting a full
+    section for each of them would bury the handful with annotations in empty
+    timeline/artifact lists, so details are limited to rendered content.
+    """
+    if include_notes and summary["notes_count"]:
+        return True
+    if include_meeting_notes and summary["treated_note"]:
+        return True
+    if include_mail and summary["mention_count"]:
+        return True
+    return False
+
+
 def _filter_graph(graph: dict, agenda_item: str | None) -> dict:
     if not agenda_item:
         return graph
@@ -203,6 +225,13 @@ def render_markdown(
                 lines.append("")
 
         for summary in summaries:
+            if not _has_detail_content(
+                summary,
+                include_mail=include_mail,
+                include_notes=include_notes,
+                include_meeting_notes=include_meeting_notes,
+            ):
+                continue
             detail = repository.get_tdoc(connection, summary["tdoc_number"])
             if detail is None:
                 continue

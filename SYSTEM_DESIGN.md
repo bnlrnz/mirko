@@ -865,10 +865,12 @@ covers the state column/line and the node status line.
 Contents:
 
 1. Header: meeting, generated-at, endpoint, freshness, counts and scope.
-2. Summary table: TDoc, agenda, type, state, source, notes count, tracked
-   (state and notes columns follow the options).
-3. Per TDoc: metadata, state, meeting note, status, event timeline, artifacts,
-   notes, optional mails — each section only when enabled.
+2. Summary table: every TDoc in scope — TDoc, agenda, type, state, source, notes
+   count, tracked (state and notes columns follow the options).
+3. Per TDoc detail sections only for TDocs with rendered content (notes, meeting
+   notes, or linked mail when `include_mail` is on): metadata, state, meeting
+   note, status, event timeline, artifacts, notes, optional mails — each section
+   only when enabled. Metadata-only TDocs stay in the table without a section.
 4. A Mermaid `graph LR` lineage diagram.
 5. Muted/inactive branches listed and marked; never omitted silently.
 6. Ephemeral artifacts marked as such.

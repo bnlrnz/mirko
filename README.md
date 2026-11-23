@@ -159,6 +159,9 @@ repeated at any time. The **Export** button in the top bar opens an options menu
 The same settings are available as query parameters: `tracked_only`,
 `agenda_item`, `include_lineage`, `include_timeline`, `include_artifacts`,
 `include_notes`, `include_meeting_notes`, `include_state`, and `include_mail`.
+The summary table always covers every TDoc in scope; detailed sections are only
+emitted for TDocs that have notes, a meeting note, or linked mail when mail is
+included.
 
 **Finalize** (`POST /api/finalize`) is the end-of-meeting workflow and has no UI
 button: it re-ingests the latest agenda, writes a whole-meeting timestamped file
