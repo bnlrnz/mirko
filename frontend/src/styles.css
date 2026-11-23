@@ -240,7 +240,7 @@ h3 { font-size: 13px; margin: 16px 0 6px; }
 .lineage-scroll { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: linear-gradient(90deg, #fff, #fafbfd); cursor: grab; touch-action: none; user-select: none; }
 .lineage-scroll.panning { cursor: grabbing; }
 .lineage-canvas { width: max-content; min-width: 100%; min-height: 100%; }
-.lineage-canvas svg { display: block; }
+.lineage-canvas svg { display: block; overflow: visible; }
 .agenda-groups { pointer-events: none; }
 .agenda-group rect {
   fill: rgba(123, 135, 148, 0.06);

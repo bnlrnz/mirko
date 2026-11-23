@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LineageView, agendaGroupBoxes, chainDrafts, layoutLineage } from "./LineageView";
+import {
+  LineageView,
+  agendaGroupBoxes,
+  agendaLabelWidth,
+  chainDrafts,
+  layoutLineage,
+} from "./LineageView";
 import { lineage } from "../test/fixtures";
 import type { Filters, Lineage } from "../types";
 
@@ -1375,6 +1381,36 @@ describe("LineageView", () => {
 
     expect(topics).toHaveLength(2);
     expect(topics[0].textContent).toBe(topic);
+  });
+
+  it("reserves canvas width for agenda labels on a single column", () => {
+    const topic =
+      "Security architecture and protocols for the next generation of systems";
+    const node = {
+      ...lineage.nodes[0],
+      tdoc_number: "S3-264900",
+      agenda_item: "5.3.1.3",
+      topic,
+      is_tracked: false,
+    };
+    const single = { nodes: [node], edges: [] };
+    render(<LineageView lineage={single} selected={null} onSelect={vi.fn()} />);
+
+    const svg = screen.getByRole("img", { name: "TDoc lineage graph" });
+    const width = Number(svg.getAttribute("width"));
+    const box = agendaGroupBoxes(layoutLineage(single).nodes)[0];
+    expect(width).toBeGreaterThan(320);
+    expect(width).toBeGreaterThanOrEqual(
+      box.x + agendaLabelWidth(box) + 34,
+    );
+
+    // Zooming out scales the labels up to keep them readable; the canvas has
+    // to grow with them or the topic is clipped on the right.
+    fireEvent.wheel(screen.getByTestId("lineage-scroll"), {
+      deltaY: 600,
+      ctrlKey: true,
+    });
+    expect(Number(svg.getAttribute("width"))).toBeGreaterThan(width);
   });
 
   it("resets zoom from the floating button", async () => {

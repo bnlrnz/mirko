@@ -99,6 +99,14 @@ const WHEEL_ZOOM_FACTOR = 0.0015;
 const AGENDA_GROUP_PADDING = 16;
 const AGENDA_BAND_GAP = 104;
 const AGENDA_LABEL_MAX_SCALE = 2.2;
+// SVG text cannot be measured before layout. Use a conservative advance width
+// so a long agenda topic never runs past the canvas edge; overestimating only
+// adds a little horizontal scroll room.
+const AGENDA_LABEL_CHAR_WIDTH = 7.5;
+const AGENDA_LABEL_X = 2;
+const AGENDA_LABEL_TOPIC_GAP = 8;
+// Leave room for the group padding plus an overlay scrollbar.
+const AGENDA_LABEL_END_PADDING = 34;
 // Room below the lowest rectangle for its bottom-left label at any zoom.
 const AGENDA_BOTTOM_LABEL_SPACE = 40;
 // Drag distance before a press becomes a pan, and the edge strip reserved for
@@ -566,6 +574,34 @@ function agendaGroupTopic(nodes: PositionedNode[]): string | null {
   return null;
 }
 
+export function agendaLabelWidth(
+  box: Pick<AgendaGroupBox, "agenda" | "topic">,
+): number {
+  const agenda = box.agenda.length * AGENDA_LABEL_CHAR_WIDTH;
+  const topic = box.topic
+    ? AGENDA_LABEL_TOPIC_GAP + box.topic.length * AGENDA_LABEL_CHAR_WIDTH
+    : 0;
+  return AGENDA_LABEL_X + agenda + topic;
+}
+
+// Reserve horizontal room for the labels, which are drawn at the top-left and
+// bottom-left of each rectangle and grow when zoomed out so they stay readable.
+export function agendaCanvasWidth(
+  boxes: readonly AgendaGroupBox[],
+  baseWidth: number,
+  labelScale: number,
+): number {
+  let width = baseWidth;
+  for (const box of boxes) {
+    const right =
+      box.x + agendaLabelWidth(box) * labelScale + AGENDA_LABEL_END_PADDING;
+    if (right > width) {
+      width = right;
+    }
+  }
+  return width;
+}
+
 function edgePath(edge: LineageEdge, positions: Map<string, PositionedNode>) {
   const source = positions.get(edge.source);
   const target = positions.get(edge.target);
@@ -1022,6 +1058,10 @@ export function LineageViewBase({
     [layout.nodes],
   );
   const agendaLabelScale = Math.min(1 / zoom, AGENDA_LABEL_MAX_SCALE);
+  const canvasWidth = useMemo(
+    () => agendaCanvasWidth(agendaGroups, layout.width, agendaLabelScale),
+    [agendaGroups, layout.width, agendaLabelScale],
+  );
   const positions = useMemo(
     () => new Map(layout.nodes.map((node) => [node.tdoc_number, node])),
     [layout.nodes],
@@ -1608,9 +1648,9 @@ export function LineageViewBase({
           <svg
             role="img"
             aria-label="TDoc lineage graph"
-            width={layout.width}
+            width={canvasWidth}
             height={layout.height}
-            viewBox={`0 0 ${layout.width} ${layout.height}`}
+            viewBox={`0 0 ${canvasWidth} ${layout.height}`}
           >
             <g
               className="agenda-groups"
